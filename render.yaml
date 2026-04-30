@@ -13,12 +13,14 @@ services:
     region: oregon
     plan: free
 
+    # Root dir is PROJECT ROOT (not backend/) so all modules are importable
+    rootDir: .
+
     # Build — installs ALL deps from the backend folder
     buildCommand: pip install --upgrade pip && pip install -r backend/requirements.txt
 
-    # Start — gunicorn with 2 async (uvicorn) workers
-    # Copy this EXACT command into Render Dashboard → Settings → Start Command
-    startCommand: gunicorn backend.main:app --workers 2 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT --timeout 120 --keep-alive 5 --graceful-timeout 30 --log-level info --access-logfile - --error-logfile -
+    # Start — runs from project root, imports backend.main
+    startCommand: gunicorn backend.main:app --workers 1 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT --timeout 120 --keep-alive 5 --graceful-timeout 30 --log-level info --access-logfile - --error-logfile -
 
     healthCheckPath: /api/health
 
@@ -30,6 +32,6 @@ services:
       - key: ALLOWED_ORIGINS
         value: "*"
       # ⚠️  Set these sensitive vars in the Render Dashboard, NOT here:
-      # MONGODB_URI  →  mongodb+srv://...
-      # JWT_SECRET   →  (long random string, 64+ chars)
-      # GEMINI_API_KEY → AIza...
+      # MONGODB_URI    →  mongodb+srv://...
+      # JWT_SECRET     →  (long random string, 64+ chars)
+      # GEMINI_API_KEY →  AIza...
