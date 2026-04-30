@@ -19,10 +19,16 @@ def _get_groq_client():
     if _groq_client is not None:
         return _groq_client
         
+    # Failsafe: explicitly load .env right before checking, in case of weird import orders
+    from dotenv import load_dotenv
+    from pathlib import Path
+    load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=False)
+    load_dotenv(Path(__file__).resolve().parent / ".env", override=False)
+        
     api_key = settings.groq_api_key or os.environ.get('GROQ_API_KEY', '')
     if not api_key:
         logger.warning("GROQ_API_KEY not set — LLM coaching will be disabled.")
-        raise ValueError("GROQ_API_KEY not configured")
+        raise ValueError(f"GROQ_API_KEY not configured. Please restart your server or check Render Dashboard.")
         
     _groq_client = Groq(api_key=api_key)
     logger.info("Groq API configured successfully.")
