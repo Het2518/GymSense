@@ -102,7 +102,7 @@ async def _ensure_model_loaded() -> None:
 
 
 def _load_model_sync() -> None:
-    """Runs in thread pool. Each import is individually guarded so partial failures degrade gracefully."""
+    """Runs in thread pool. Logs every path so we can see exactly why model fails to load."""
     try:
         import joblib
     except ImportError:
@@ -115,6 +115,38 @@ def _load_model_sync() -> None:
         logger.warning(f"tensorflow not available ({exc}) — ML disabled")
         return
 
+    # Try multiple candidate roots so the model loads whether Render's CWD
+    # is the project root OR the backend subdirectory.
+    cwd = os.getcwd()
+    candidates = [
+        PROJECT_ROOT,                                    # computed from __file__
+        cwd,                                             # actual CWD at runtime
+        os.path.dirname(os.path.abspath(__file__)),      # backend/ dir itself
+        os.path.join(cwd, ".."),                         # one level up from CWD
+    ]
+
+    mp = os.environ.get("MODEL_WEIGHTS_PATH")
+    sp = os.environ.get("SCALER_PATH")
+    lp = os.environ.get("LABEL_ENCODER_PATH")
+
+    def _find(env_val, filename):
+        if env_val and os.path.exists(env_val):
+            return env_val
+        for base in candidates:
+            p = os.path.join(base, "models", filename)
+            if os.path.exists(p):
+                return p
+        return None
+
+    mp = _find(mp, "best_model.weights.h5")
+    sp = _find(sp, "scaler.pkl")
+    lp = _find(lp, "label_encoder.pkl")
+
+    logger.info(f"ML paths — CWD:{cwd}  PROJECT_ROOT:{PROJECT_ROOT}")
+    logger.info(f"  weights : {mp}")
+    logger.info(f"  scaler  : {sp}")
+    logger.info(f"  encoder : {lp}")
+
     try:
         gpus = tf.config.list_physical_devices("GPU")
         for gpu in gpus:
@@ -123,16 +155,19 @@ def _load_model_sync() -> None:
             state["gpu_available"] = True
             state["gpu_name"] = gpus[0].name
 
-        mp = os.environ.get("MODEL_WEIGHTS_PATH", os.path.join(MODELS_DIR, "best_model.weights.h5"))
-        sp = os.environ.get("SCALER_PATH",        os.path.join(MODELS_DIR, "scaler.pkl"))
-        lp = os.environ.get("LABEL_ENCODER_PATH", os.path.join(MODELS_DIR, "label_encoder.pkl"))
-
-        if os.path.exists(sp):
+        if sp and os.path.exists(sp):
             state["scaler"] = joblib.load(sp)
-        if os.path.exists(lp):
-            state["le"] = joblib.load(lp)
+            logger.info("Scaler loaded ✓")
+        else:
+            logger.warning(f"Scaler not found: {sp}")
 
-        if os.path.exists(mp) and state["le"] is not None:
+        if lp and os.path.exists(lp):
+            state["le"] = joblib.load(lp)
+            logger.info("Label encoder loaded ✓")
+        else:
+            logger.warning(f"Label encoder not found: {lp}")
+
+        if mp and os.path.exists(mp) and state["le"] is not None:
             import train
             n_classes    = len(state["le"].classes_)
             state["model"] = train.build_hybrid_model(
@@ -140,15 +175,19 @@ def _load_model_sync() -> None:
                 window_size=80, n_windows=4, sensor_mode="combine",
             )
             state["model"].load_weights(mp)
+            logger.info("Model weights loaded ✓")
+        else:
+            logger.warning(f"Model weights not found or LE missing: {mp}")
 
         if state["model"] and state["scaler"] and state["le"]:
             state["model_loaded"] = True
-            logger.info("ML model loaded ✓")
+            logger.info("All ML artifacts ready ✓")
         else:
-            logger.warning("ML model artifacts not found — /api/analyze will return 503")
+            logger.warning("ML model NOT loaded — /api/analyze will return 503")
 
     except Exception as exc:
-        logger.warning(f"ML load failed: {exc}")
+        logger.warning(f"ML load failed: {exc}", exc_info=True)
+
 
 
 # ── CORS: wildcard — allows all origins (safe because we use Bearer tokens, no cookies) ──
