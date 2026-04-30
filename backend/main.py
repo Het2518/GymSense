@@ -180,12 +180,30 @@ def _load_model_sync() -> None:
 
         logger.info(f"Keras model path: {keras_path}  exists={os.path.exists(keras_path)}")
 
-        if not os.path.exists(keras_path):
-            # Fallback: try weights-only approach with .h5 file
+        model_loaded = False
+        
+        if os.path.exists(keras_path):
+            try:
+                state["model"] = tf.keras.models.load_model(
+                    keras_path, compile=False, safe_mode=False
+                )
+                logger.info("Full .keras model loaded ✓  (compile=False, safe_mode=False)")
+                model_loaded = True
+            except TypeError:
+                try:
+                    state["model"] = tf.keras.models.load_model(keras_path, compile=False)
+                    logger.info("Full .keras model loaded ✓  (compile=False)")
+                    model_loaded = True
+                except Exception as e:
+                    logger.warning(f".keras model load failed (TypeError fallback): {e}")
+            except Exception as e:
+                logger.warning(f".keras model load failed: {e}")
+
+        if not model_loaded:
             if not os.path.exists(mp):
-                logger.warning(f"Neither .keras nor .h5 model found — ML disabled")
+                logger.warning(f"Neither working .keras nor .h5 model found — ML disabled")
                 return
-            logger.warning(".keras not found, attempting weights-only load (requires train.py)")
+            logger.warning("Attempting weights-only load (requires train.py)")
             try:
                 import train
                 n_classes    = len(state["le"].classes_)
@@ -195,22 +213,10 @@ def _load_model_sync() -> None:
                 )
                 state["model"].load_weights(mp)
                 logger.info("Weights-only load succeeded ✓")
+                model_loaded = True
             except Exception as exc2:
                 logger.error(f"Weights-only load also failed: {exc2}", exc_info=True)
                 return
-        else:
-            # Primary path: load full .keras model — self-contained, no train.py
-            # compile=False  → skip optimizer restore (inference-only, avoids optimizer crashes)
-            # safe_mode=False → allow Lambda layers & custom ops saved in the model
-            try:
-                state["model"] = tf.keras.models.load_model(
-                    keras_path, compile=False, safe_mode=False
-                )
-                logger.info("Full .keras model loaded ✓  (compile=False, safe_mode=False)")
-            except TypeError:
-                # Older TF (<2.13) doesn't have safe_mode param
-                state["model"] = tf.keras.models.load_model(keras_path, compile=False)
-                logger.info("Full .keras model loaded ✓  (compile=False)")
 
         state["model_loaded"] = True
         logger.info("All ML artifacts ready ✓  model_loaded=True")

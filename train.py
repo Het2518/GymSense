@@ -18,10 +18,7 @@ import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras import layers, regularizers, constraints, callbacks
 
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-import seaborn as sns
+
 
 # ──────────────────────────────────────────────
 # GPU Configuration
@@ -391,6 +388,11 @@ def evaluate_model(model, X_test, y_test_cat, y_test, le, results_dir):
     )
     print(classification_report(y_test, y_pred, target_names=le.classes_))
 
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+
     # Confusion Matrix
     cm = confusion_matrix(y_test, y_pred)
     plt.figure(figsize=(12, 10))
@@ -416,6 +418,10 @@ def evaluate_model(model, X_test, y_test_cat, y_test, le, results_dir):
 
 def plot_learning_curves(history, results_dir):
     """Plot and save training/validation loss and accuracy curves."""
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
 
     # Loss
