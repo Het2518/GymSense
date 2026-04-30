@@ -13,24 +13,17 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-# ── Resolve ALL paths relative to THIS file — works regardless of CWD ─────────
-# When Render root = backend/:  __file__ = /opt/render/project/src/backend/main.py
-# BACKEND_DIR = /opt/render/project/src/backend/
-# PROJECT_ROOT = /opt/render/project/src/
-BACKEND_DIR  = Path(__file__).resolve().parent          # .../backend/
-PROJECT_ROOT = str(BACKEND_DIR.parent)                  # .../  (project root)
+# ── All paths resolved relative to THIS file — never depends on CWD ───────────
+BACKEND_DIR  = Path(__file__).resolve().parent   # .../backend/
+PROJECT_ROOT = str(BACKEND_DIR.parent)           # .../  (project root)
 
-# Load .env from backend directory first, then project root
 load_dotenv(BACKEND_DIR / ".env")
 load_dotenv(Path(PROJECT_ROOT) / ".env", override=False)
 
-# Add project root to sys.path so `import train`, `import session_processor` etc. work
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
-# Also add backend dir itself so `import main` / `import auth` work without prefix
-BACKEND_STR = str(BACKEND_DIR)
-if BACKEND_STR not in sys.path:
-    sys.path.insert(0, BACKEND_STR)
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -38,22 +31,19 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-# ── Auth & DB (no heavy deps) ─────────────────────────────────────────────────
 from backend.auth import get_current_user, router as auth_router
 from backend.database import (
     create_indexes, get_goals_collection, get_sessions_collection, ping_db
 )
 from backend.models import UserOut
 
-# ── Logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
 )
 logger = logging.getLogger("gymsense")
 
-# ── Absolute directory paths — NEVER depend on CWD ────────────────────────────
-# Models are stored in backend/models/ (copied there for Render root=backend/ deploys)
+# ── Absolute directories ───────────────────────────────────────────────────────
 MODELS_DIR    = str(BACKEND_DIR / "models")
 SESSIONS_DIR  = str(BACKEND_DIR / "sessions")
 REPORTS_DIR   = str(BACKEND_DIR / "reports")
@@ -62,10 +52,7 @@ FRONTEND_DIST = str(BACKEND_DIR.parent / "frontend" / "dist")
 os.makedirs(SESSIONS_DIR, exist_ok=True)
 os.makedirs(REPORTS_DIR,  exist_ok=True)
 
-logger.info(f"BACKEND_DIR  = {BACKEND_DIR}")
-logger.info(f"PROJECT_ROOT = {PROJECT_ROOT}")
-logger.info(f"MODELS_DIR   = {MODELS_DIR}")
-logger.info(f"models exist = {os.path.isdir(MODELS_DIR)}")
+logger.info(f"BACKEND_DIR={BACKEND_DIR}  MODELS_DIR={MODELS_DIR}")
 
 # ── ML state ──────────────────────────────────────────────────────────────────
 state: dict = {
@@ -94,15 +81,118 @@ async def lifespan(app: FastAPI):
         logger.info("MongoDB reachable ✓")
     except Exception as exc:
         logger.error(f"MongoDB ping failed: {exc}")
-
     try:
         await create_indexes()
     except Exception as exc:
         logger.warning(f"Index creation skipped: {exc}")
-
     logger.info("GymSense startup complete ✓")
     yield
     logger.info("GymSense shutting down.")
+
+
+# ── Model architecture (inline — no import train needed) ──────────────────────
+def _build_model(n_classes: int):
+    """
+    Builds the Hybrid CNN-Dilated Self-Attention skeleton.
+    Architecture exactly matches train.py so load_weights(.h5) works.
+    Lambda layers replaced with direct tensor ops — no serialization issues.
+    """
+    import tensorflow as tf
+    from tensorflow import keras
+    from tensorflow.keras import layers, regularizers, constraints
+
+    def conv_block(x, in_chans, F1=32, D=4, pfx=''):
+        x = layers.Conv2D(F1, (20, 1), padding='same', use_bias=True,
+                          kernel_regularizer=regularizers.L2(0.009),
+                          kernel_constraint=constraints.max_norm(0.8),
+                          name=f'{pfx}_conv1')(x)
+        x = layers.LayerNormalization(name=f'{pfx}_ln1')(x)
+        x = layers.Activation('elu', name=f'{pfx}_elu1')(x)
+        x = layers.DepthwiseConv2D((1, in_chans), depth_multiplier=D, use_bias=True,
+                                    depthwise_regularizer=regularizers.L2(0.009),
+                                    depthwise_constraint=constraints.max_norm(0.8),
+                                    name=f'{pfx}_dwconv')(x)
+        x = layers.LayerNormalization(name=f'{pfx}_ln2')(x)
+        x = layers.Activation('elu', name=f'{pfx}_elu2')(x)
+        x = layers.Dropout(0.1, name=f'{pfx}_drop1')(x)
+        F2 = F1 * D
+        x = layers.Conv2D(F2, (10, 1), padding='same', use_bias=True,
+                          kernel_regularizer=regularizers.L2(0.009),
+                          kernel_constraint=constraints.max_norm(0.8),
+                          name=f'{pfx}_conv2')(x)
+        x = layers.LayerNormalization(name=f'{pfx}_ln3')(x)
+        x = layers.Activation('elu', name=f'{pfx}_elu3')(x)
+        x = layers.Dropout(0.1, name=f'{pfx}_drop2')(x)
+        return x
+
+    def mha_block(x, pfx=''):
+        skip = x
+        x = layers.LayerNormalization(epsilon=1e-6, name=f'{pfx}_mha_ln')(x)
+        x = layers.MultiHeadAttention(num_heads=4, key_dim=8, dropout=0.1,
+                                       name=f'{pfx}_mha')(x, x)
+        x = layers.Dropout(0.3, name=f'{pfx}_mha_drop')(x)
+        x = layers.Add(name=f'{pfx}_mha_add')([skip, x])
+        return x
+
+    def dilated_stage(x, rate, sname):
+        res = x
+        x = layers.Conv1D(32, 3, dilation_rate=rate, padding='causal',
+                          activation='linear',
+                          kernel_regularizer=regularizers.L2(0.009),
+                          kernel_constraint=constraints.max_norm(0.6),
+                          kernel_initializer='he_uniform',
+                          name=f'{sname}_conv1')(x)
+        x = layers.BatchNormalization(name=f'{sname}_bn1')(x)
+        x = layers.Activation('elu', name=f'{sname}_elu1')(x)
+        x = layers.Dropout(0.1, name=f'{sname}_drop1')(x)
+        x = layers.Conv1D(32, 3, dilation_rate=rate, padding='causal',
+                          activation='linear',
+                          kernel_regularizer=regularizers.L2(0.009),
+                          kernel_constraint=constraints.max_norm(0.6),
+                          kernel_initializer='he_uniform',
+                          name=f'{sname}_conv2')(x)
+        x = layers.BatchNormalization(name=f'{sname}_bn2')(x)
+        x = layers.Activation('elu', name=f'{sname}_elu2')(x)
+        x = layers.Dropout(0.1, name=f'{sname}_drop2')(x)
+        if res.shape[-1] != 32:
+            res = layers.Conv1D(32, 1, name=f'{sname}_res_conv')(res)
+        x = layers.Add(name=f'{sname}_add')([res, x])
+        x = layers.Activation('elu', name=f'{sname}_elu_out')(x)
+        return x
+
+    # Input: (batch, 1, 80, 7)
+    inp = layers.Input(shape=(1, 80, 7), name='input')
+
+    # Slice channels — direct tensor ops, no Lambda layers
+    imu = inp[:, :, :, 0:6]
+    cap = tf.expand_dims(inp[:, :, :, -1], -1)
+
+    imu = layers.Permute((2, 3, 1), name='permute_imu')(imu)
+    cap = layers.Permute((2, 3, 1), name='permute_cap')(cap)
+
+    imu_out = conv_block(imu, in_chans=6, pfx='imu')
+    cap_out = conv_block(cap, in_chans=1, pfx='cap')
+
+    fused  = layers.Concatenate(axis=-1, name='concat_branches')([imu_out, cap_out])
+    # squeeze spatial dim: (batch,80,1,256) → (batch,80,256)
+    block1 = fused[:, :, -1, :]
+
+    n_windows = 4
+    window_outputs = []
+    for i in range(n_windows):
+        s, e = i, 80 - n_windows + i + 1
+        win = block1[:, s:e, :]
+        win = mha_block(win, pfx=f'w{i}')
+        win = dilated_stage(win, 1,           f'w{i}_di_s1')
+        win = dilated_stage(win, 2 ** (i+1),  f'w{i}_di_s2')
+        win = win[:, -1, :]
+        win = layers.Dense(n_classes, kernel_regularizer=regularizers.L2(0.5),
+                           name=f'w{i}_dense')(win)
+        window_outputs.append(win)
+
+    avg    = layers.Average(name='avg_windows')(window_outputs)
+    output = layers.Activation('softmax', name='softmax')(avg)
+    return keras.Model(inputs=inp, outputs=output, name='HybridCNN_DilatedSA')
 
 
 # ── Lazy ML loader ────────────────────────────────────────────────────────────
@@ -118,15 +208,12 @@ async def _ensure_model_loaded() -> None:
 
 def _load_model_sync() -> None:
     """
-    Load ML artifacts.  All paths are ABSOLUTE (derived from BACKEND_DIR / __file__),
-    so CWD doesn't matter at all.
+    Load saved model artifacts from backend/models/.
+    Uses pre-trained weights directly — no training, no import train.
     """
-    # --- Resolve model file paths ---
-    # Priority: env var (must be absolute or relative to backend dir) > backend/models/
     def _abs(env_key: str, default_name: str) -> str:
         val = os.environ.get(env_key, "")
         if val:
-            # Make relative env paths absolute relative to BACKEND_DIR
             p = Path(val)
             return str(p if p.is_absolute() else BACKEND_DIR / p)
         return str(BACKEND_DIR / "models" / default_name)
@@ -135,84 +222,42 @@ def _load_model_sync() -> None:
     sp = _abs("SCALER_PATH",        "scaler.pkl")
     lp = _abs("LABEL_ENCODER_PATH", "label_encoder.pkl")
 
-    logger.info(f"Model loader — weights: {mp}")
-    logger.info(f"              scaler : {sp}  exists={os.path.exists(sp)}")
-    logger.info(f"              encoder: {lp}  exists={os.path.exists(lp)}")
-    logger.info(f"              weights  exists={os.path.exists(mp)}")
+    logger.info(f"ML loader — weights:{mp} exists={os.path.exists(mp)}")
+    logger.info(f"            scaler :{sp} exists={os.path.exists(sp)}")
+    logger.info(f"            encoder:{lp} exists={os.path.exists(lp)}")
 
-    # --- Check TF available ---
     try:
         import joblib
     except ImportError:
-        logger.warning("joblib not installed — ML disabled")
-        return
+        logger.error("joblib not installed"); return
+
     try:
         import tensorflow as tf
+        logger.info(f"TensorFlow {tf.__version__} ✓")
     except Exception as exc:
-        logger.warning(f"tensorflow not available: {exc} — ML disabled")
-        return
+        logger.error(f"TF import failed: {exc}"); return
 
     try:
-        # GPU (no-op on CPU-only Render instances)
-        for gpu in tf.config.list_physical_devices("GPU"):
-            tf.config.experimental.set_memory_growth(gpu, True)
-
         if not os.path.exists(sp):
-            logger.warning(f"Scaler not found: {sp}")
-            return
+            logger.error(f"Scaler missing: {sp}"); return
         state["scaler"] = joblib.load(sp)
-        logger.info("Scaler loaded ✓")
+        logger.info("scaler.pkl loaded ✓")
 
         if not os.path.exists(lp):
-            logger.warning(f"Label encoder not found: {lp}")
-            return
+            logger.error(f"Label encoder missing: {lp}"); return
         state["le"] = joblib.load(lp)
-        logger.info("Label encoder loaded ✓")
+        logger.info(f"label_encoder.pkl loaded ✓  classes={list(state['le'].classes_)}")
 
-        # ── Use best_model.keras (full saved model — no import train needed) ────
-        # .keras bundles BOTH architecture + weights, so we don't need train.py at all.
-        keras_path = str(BACKEND_DIR / "models" / "best_model.keras")
-        env_keras  = os.environ.get("MODEL_KERAS_PATH", "")
-        if env_keras:
-            p = Path(env_keras)
-            keras_path = str(p if p.is_absolute() else BACKEND_DIR / p)
+        if not os.path.exists(mp):
+            logger.error(f"Weights missing: {mp}"); return
 
-        logger.info(f"Keras model path: {keras_path}  exists={os.path.exists(keras_path)}")
-
-        if not os.path.exists(keras_path):
-            # Fallback: try weights-only approach with .h5 file
-            if not os.path.exists(mp):
-                logger.warning(f"Neither .keras nor .h5 model found — ML disabled")
-                return
-            logger.warning(".keras not found, attempting weights-only load (requires train.py)")
-            try:
-                import train
-                n_classes    = len(state["le"].classes_)
-                state["model"] = train.build_hybrid_model(
-                    n_classes=n_classes, n_channels=7,
-                    window_size=80, n_windows=4, sensor_mode="combine",
-                )
-                state["model"].load_weights(mp)
-                logger.info("Weights-only load succeeded ✓")
-            except Exception as exc2:
-                logger.error(f"Weights-only load also failed: {exc2}", exc_info=True)
-                return
-        else:
-            # Primary path: load full .keras model — self-contained, no train.py
-            # compile=False  → skip optimizer restore (inference-only, avoids optimizer crashes)
-            # safe_mode=False → allow Lambda layers & custom ops saved in the model
-            try:
-                state["model"] = tf.keras.models.load_model(
-                    keras_path, compile=False, safe_mode=False
-                )
-                logger.info("Full .keras model loaded ✓  (compile=False, safe_mode=False)")
-            except TypeError:
-                # Older TF (<2.13) doesn't have safe_mode param
-                state["model"] = tf.keras.models.load_model(keras_path, compile=False)
-                logger.info("Full .keras model loaded ✓  (compile=False)")
-
+        n_classes = len(state["le"].classes_)
+        logger.info(f"Building model skeleton (n_classes={n_classes}) ...")
+        model = _build_model(n_classes)
+        model.load_weights(mp)
+        state["model"] = model
         state["model_loaded"] = True
-        logger.info("All ML artifacts ready ✓  model_loaded=True")
+        logger.info("model_loaded=True ✓  /api/analyze is ready")
 
     except Exception as exc:
         logger.error(f"ML load failed: {exc}", exc_info=True)
@@ -227,7 +272,6 @@ app = FastAPI(
     redoc_url=None,
 )
 
-# CORS — wildcard (Bearer tokens, no cookies needed)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -238,7 +282,6 @@ app.add_middleware(
     max_age=86400,
 )
 app.add_middleware(GZipMiddleware, minimum_size=1024)
-
 app.include_router(auth_router)
 
 
@@ -255,11 +298,11 @@ async def log_requests(request: Request, call_next):
 @app.get("/api/health")
 async def health():
     return {
-        "status":       "ok",
-        "model_loaded": state["model_loaded"],
-        "gpu":          state["gpu_available"],
-        "models_dir":   MODELS_DIR,
-        "models_exist": os.path.isdir(MODELS_DIR),
+        "status":        "ok",
+        "model_loaded":  state["model_loaded"],
+        "gpu":           state["gpu_available"],
+        "models_dir":    MODELS_DIR,
+        "models_exist":  os.path.isdir(MODELS_DIR),
     }
 
 
@@ -291,7 +334,7 @@ async def analyze_session(
         content = await file.read()
         with open(temp_csv, "wb") as fh:
             fh.write(content)
-        logger.info(f"[{session_id}] {len(content)} bytes from user {current_user.id}")
+        logger.info(f"[{session_id}] {len(content)} bytes from {current_user.id}")
 
         loop = asyncio.get_running_loop()
 
@@ -324,8 +367,8 @@ async def analyze_session(
         )
 
         await get_sessions_collection().insert_one(session_json)
-
         logger.info(f"[{session_id}] complete ✓")
+
         return {
             "session_id": session_id,
             "pdf_url":    f"/api/report/{session_id}",
@@ -389,8 +432,9 @@ async def list_sessions(current_user: UserOut = Depends(get_current_user)):
 
 @app.get("/api/sessions/{session_id}")
 async def get_session_detail(session_id: str, current_user: UserOut = Depends(get_current_user)):
-    col = get_sessions_collection()
-    doc = await col.find_one({"session_id": session_id, "user_id": current_user.id})
+    doc = await get_sessions_collection().find_one(
+        {"session_id": session_id, "user_id": current_user.id}
+    )
     if not doc:
         raise HTTPException(status_code=404, detail="Session not found")
     doc["_id"] = str(doc["_id"])
@@ -417,10 +461,12 @@ async def dashboard_stats(current_user: UserOut = Depends(get_current_user)):
     for lst in row.get("muscle_groups", []):
         for m in (lst or []):
             mc[m] = mc.get(m, 0) + 1
-    return {"total_workouts":row["total_workouts"],
-            "total_duration_min":round(row["total_duration"],1),
-            "total_reps":row["total_reps"],
-            "muscle_distribution":mc}
+    return {
+        "total_workouts":     row["total_workouts"],
+        "total_duration_min": round(row["total_duration"], 1),
+        "total_reps":         row["total_reps"],
+        "muscle_distribution": mc,
+    }
 
 
 # ── Goals ─────────────────────────────────────────────────────────────────────
@@ -463,7 +509,7 @@ async def delete_goal(goal_id: str, current_user: UserOut = Depends(get_current_
     return {"message": "Goal deleted"}
 
 
-# ── Frontend SPA ──────────────────────────────────────────────────────────────
+# ── Frontend SPA (only if built dist exists on server) ────────────────────────
 if os.path.isdir(FRONTEND_DIST):
     app.mount("/assets", StaticFiles(directory=os.path.join(FRONTEND_DIST, "assets")), name="assets")
 
