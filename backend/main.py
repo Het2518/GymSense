@@ -1,5 +1,5 @@
 # === FILE: backend/main.py ===
-# GymSense AI — FastAPI backend (production-grade, crash-resistant)
+# GymSense AI — FastAPI backend (production-grade)
 
 import asyncio
 import logging
@@ -12,198 +12,187 @@ from datetime import datetime
 from pathlib import Path
 
 from dotenv import load_dotenv
-
 load_dotenv()
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from starlette.middleware.base import BaseHTTPMiddleware
 
-# ── project root on sys.path ──────────────────────────────────────────────────
+# ── Project root on sys.path so sibling modules (train, session_processor…) import ──
 PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-# ── MongoDB & Auth (lightweight — always safe to import) ──────────────────────
-from backend.auth import get_current_user
-from backend.auth import router as auth_router
-from backend.database import (
-    create_indexes,
-    get_goals_collection,
-    get_sessions_collection,
-    ping_db,
-)
+# ── Lightweight imports (DB + auth) — always safe, no heavy deps ──────────────
+from backend.auth import get_current_user, router as auth_router
+from backend.database import create_indexes, get_goals_collection, get_sessions_collection, ping_db
 from backend.models import UserOut
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
+    format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
 )
 logger = logging.getLogger("gymsense")
 
 # ── Directories ───────────────────────────────────────────────────────────────
-MODELS_DIR = os.path.join(PROJECT_ROOT, "models")
+MODELS_DIR   = os.path.join(PROJECT_ROOT, "models")
 SESSIONS_DIR = os.path.join(PROJECT_ROOT, "sessions")
-REPORTS_DIR = os.path.join(PROJECT_ROOT, "reports")
+REPORTS_DIR  = os.path.join(PROJECT_ROOT, "reports")
 FRONTEND_DIST = os.path.join(PROJECT_ROOT, "frontend", "dist")
 
 os.makedirs(SESSIONS_DIR, exist_ok=True)
-os.makedirs(REPORTS_DIR, exist_ok=True)
+os.makedirs(REPORTS_DIR,  exist_ok=True)
 
-# ── Global ML state ───────────────────────────────────────────────────────────
+# ── ML state (populated lazily on first /api/analyze) ─────────────────────────
 state: dict = {
-    "model": None,
-    "scaler": None,
-    "le": None,
+    "model":        None,
+    "scaler":       None,
+    "le":           None,
     "model_loaded": False,
     "gpu_available": False,
-    "gpu_name": "N/A",
+    "gpu_name":     "N/A",
 }
 
+# Global lock created inside the running event loop (avoids deprecation warning)
+_model_lock: asyncio.Lock | None = None
 
-# ── Lifespan ──────────────────────────────────────────────────────────────────
+
+def _get_model_lock() -> asyncio.Lock:
+    global _model_lock
+    if _model_lock is None:
+        _model_lock = asyncio.Lock()
+    return _model_lock
+
+
+# ── Lifespan: DB only — ML loaded lazily ──────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # 1. DB ping — non-fatal on failure
+    # 1. Verify MongoDB is reachable (non-fatal)
     try:
         await ping_db()
         logger.info("MongoDB reachable ✓")
     except Exception as exc:
-        logger.error(f"MongoDB ping failed: {exc}")
+        logger.error(f"MongoDB ping failed (check MONGODB_URI env var): {exc}")
 
-    # 2. Indexes
+    # 2. Create indexes (idempotent, non-fatal)
     try:
         await create_indexes()
     except Exception as exc:
         logger.warning(f"Index creation skipped: {exc}")
 
-    # ML model loaded lazily on first /api/analyze call — keeps startup fast
-    logger.info("GymSense backend startup complete ✓")
+    logger.info("GymSense startup complete ✓  (ML model loads on first /api/analyze)")
     yield
-    logger.info("GymSense backend shutting down …")
+    logger.info("GymSense shutting down.")
 
 
-_model_load_lock = asyncio.Lock() if False else None  # initialised below
-
-
-async def _ensure_model_loaded():
-    """Lazy-load ML model on first call. Thread-safe via asyncio.Lock."""
-    global _model_load_lock
-    if _model_load_lock is None:
-        _model_load_lock = asyncio.Lock()
-
+# ── Lazy ML loader ────────────────────────────────────────────────────────────
+async def _ensure_model_loaded() -> None:
+    """Load TF model on first call, thread-safe. No-op if already loaded or TF missing."""
     if state["model_loaded"]:
         return
-
-    async with _model_load_lock:
-        if state["model_loaded"]:  # double-check after acquiring lock
+    lock = _get_model_lock()
+    async with lock:
+        if state["model_loaded"]:
             return
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, _load_model_sync)
 
 
-def _load_model_sync():
-    """Synchronous ML loading — runs in thread pool, never on event loop."""
+def _load_model_sync() -> None:
+    """Runs in thread pool. Each import is individually guarded so partial failures degrade gracefully."""
     try:
         import joblib
     except ImportError:
         logger.warning("joblib not installed — ML disabled")
         return
+
     try:
         import tensorflow as tf
-    except ImportError:
-        logger.warning("tensorflow not installed — ML disabled")
-        return
-    except Exception as exc:
-        logger.warning(f"tensorflow import failed: {exc} — ML disabled")
+    except (ImportError, Exception) as exc:
+        logger.warning(f"tensorflow not available ({exc}) — ML disabled")
         return
 
     try:
         gpus = tf.config.list_physical_devices("GPU")
+        for gpu in gpus:
+            tf.config.experimental.set_memory_growth(gpu, True)
         if gpus:
-            for gpu in gpus:
-                tf.config.experimental.set_memory_growth(gpu, True)
             state["gpu_available"] = True
             state["gpu_name"] = gpus[0].name
 
-        model_path = os.environ.get("MODEL_WEIGHTS_PATH", os.path.join(MODELS_DIR, "best_model.weights.h5"))
-        scaler_path = os.environ.get("SCALER_PATH", os.path.join(MODELS_DIR, "scaler.pkl"))
-        le_path = os.environ.get("LABEL_ENCODER_PATH", os.path.join(MODELS_DIR, "label_encoder.pkl"))
+        mp = os.environ.get("MODEL_WEIGHTS_PATH", os.path.join(MODELS_DIR, "best_model.weights.h5"))
+        sp = os.environ.get("SCALER_PATH",        os.path.join(MODELS_DIR, "scaler.pkl"))
+        lp = os.environ.get("LABEL_ENCODER_PATH", os.path.join(MODELS_DIR, "label_encoder.pkl"))
 
-        if os.path.exists(scaler_path):
-            state["scaler"] = joblib.load(scaler_path)
-        if os.path.exists(le_path):
-            state["le"] = joblib.load(le_path)
+        if os.path.exists(sp):
+            state["scaler"] = joblib.load(sp)
+        if os.path.exists(lp):
+            state["le"] = joblib.load(lp)
 
-        if os.path.exists(model_path) and state["le"]:
+        if os.path.exists(mp) and state["le"] is not None:
             import train
-            n_classes = len(state["le"].classes_)
+            n_classes    = len(state["le"].classes_)
             state["model"] = train.build_hybrid_model(
-                n_classes=n_classes, n_channels=7, window_size=80, n_windows=4, sensor_mode="combine"
+                n_classes=n_classes, n_channels=7,
+                window_size=80, n_windows=4, sensor_mode="combine",
             )
-            state["model"].load_weights(model_path)
+            state["model"].load_weights(mp)
 
         if state["model"] and state["scaler"] and state["le"]:
             state["model_loaded"] = True
-            logger.info("All ML artifacts loaded ✓")
+            logger.info("ML model loaded ✓")
+        else:
+            logger.warning("ML model artifacts not found — /api/analyze will return 503")
+
     except Exception as exc:
-        logger.warning(f"ML model load failed (ML disabled): {exc}")
+        logger.warning(f"ML load failed: {exc}")
 
 
-# ── CORS origins ──────────────────────────────────────────────────────────────
-_raw_origins = os.environ.get("ALLOWED_ORIGINS", "*")
-ALLOWED_ORIGINS = (
-    ["*"]
-    if _raw_origins.strip() == "*"
-    else [o.strip() for o in _raw_origins.split(",") if o.strip()]
-)
+# ── CORS: wildcard — allows all origins (safe because we use Bearer tokens, no cookies) ──
+# Hardcoded here so it is NEVER affected by missing env vars or import-time ordering.
+ALLOWED_ORIGINS = ["*"]
 
-# ── App ───────────────────────────────────────────────────────────────────────
+# ── FastAPI app ───────────────────────────────────────────────────────────────
 app = FastAPI(
-    title="GymSense AI SaaS",
-    version="2.1.0",
+    title="GymSense AI",
+    version="2.2.0",
     lifespan=lifespan,
-    docs_url="/docs" if os.environ.get("ENV") != "production" else None,
+    docs_url="/docs",   # keep docs available for debugging
     redoc_url=None,
 )
 
-# ── IMPORTANT: CORS must be the FIRST middleware added ────────────────────────
+# ── Middleware — ORDER MATTERS: CORS must be outermost (added first) ───────────
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
-    allow_credentials=False,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+    allow_origins=ALLOWED_ORIGINS,        # ["*"]
+    allow_credentials=False,              # must be False when allow_origins=["*"]
+    allow_methods=["*"],                  # GET POST PUT DELETE OPTIONS PATCH HEAD
     allow_headers=["*"],
     expose_headers=["Content-Disposition"],
-    max_age=86400,  # cache preflight for 24 h — browsers won't re-send OPTIONS
+    max_age=86400,                        # cache OPTIONS preflight for 24 h
 )
-
-# GZip after CORS
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 
-logger.info(f"CORS allowed origins: {ALLOWED_ORIGINS}")
+logger.info(f"CORS: allow_origins={ALLOWED_ORIGINS}")
 
-# ── Auth router ───────────────────────────────────────────────────────────────
+# ── Routers ───────────────────────────────────────────────────────────────────
 app.include_router(auth_router)
 
 
-# ── Request-timing middleware ─────────────────────────────────────────────────
+# ── Request timing ────────────────────────────────────────────────────────────
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
     t0 = time.monotonic()
     response = await call_next(request)
-    elapsed = (time.monotonic() - t0) * 1000
-    logger.info(
-        f"{request.method} {request.url.path} → {response.status_code} ({elapsed:.1f} ms)"
-    )
+    ms = (time.monotonic() - t0) * 1000
+    logger.info(f"{request.method} {request.url.path} -> {response.status_code} ({ms:.0f}ms)")
     return response
 
 
-# ── Health check (unauthenticated, always responds) ───────────────────────────
+# ── Health ────────────────────────────────────────────────────────────────────
 @app.get("/api/health", tags=["meta"])
 async def health():
     return {
@@ -214,75 +203,57 @@ async def health():
     }
 
 
-# ── Analyze session ───────────────────────────────────────────────────────────
+# ── Analyze ───────────────────────────────────────────────────────────────────
 @app.post("/api/analyze")
 async def analyze_session(
     file: UploadFile = File(...),
     coach_focus: str = Form(default="general"),
     current_user: UserOut = Depends(get_current_user),
 ):
-    """Full session analysis pipeline (JWT-protected)."""
-    # Lazy-load ML model on first request
+    """Full workout analysis pipeline. JWT-protected."""
     await _ensure_model_loaded()
 
     if not state["model_loaded"]:
         raise HTTPException(
             status_code=503,
-            detail="Model not loaded. Model files (best_model.weights.h5, scaler.pkl, label_encoder.pkl) not found on server.",
+            detail="ML model not available on this server. Model files not found.",
         )
 
     session_id = str(uuid.uuid4())
-    temp_csv = os.path.join(SESSIONS_DIR, f"{session_id}_input.csv")
+    temp_csv   = os.path.join(SESSIONS_DIR, f"{session_id}_input.csv")
 
     try:
         content = await file.read()
-        with open(temp_csv, "wb") as f:
-            f.write(content)
-        logger.info(
-            f"[{session_id}] CSV uploaded ({len(content)} bytes) by {current_user.id}"
-        )
+        with open(temp_csv, "wb") as fh:
+            fh.write(content)
+        logger.info(f"[{session_id}] {len(content)} bytes from user {current_user.id}")
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         import session_processor
-
         session_json = await loop.run_in_executor(
-            None,
-            session_processor.process_session,
-            temp_csv,
-            state["model"],
-            state["scaler"],
-            state["le"],
+            None, session_processor.process_session,
+            temp_csv, state["model"], state["scaler"], state["le"],
         )
-        session_json.update(
-            {
-                "session_id": session_id,
-                "user_id": current_user.id,
-                "user_name": current_user.name,
-                "session_date": datetime.utcnow().isoformat(),
-            }
-        )
+        session_json.update({
+            "session_id":   session_id,
+            "user_id":      current_user.id,
+            "user_name":    current_user.name,
+            "session_date": datetime.utcnow().isoformat(),
+        })
 
         import llm_coach
-
-        user_profile = {
-            k: getattr(current_user, k, None)
-            for k in (
-                "name", "age", "gender", "weight", "height",
-                "target_weight", "experience_level", "primary_goal",
-                "workout_frequency", "preferred_workout_duration",
-                "dietary_preference", "sleep_quality", "medical_conditions",
-            )
-        }
-        coaching = llm_coach.generate_coaching(
-            session_json, focus=coach_focus, user_profile=user_profile
-        )
-        
+        user_profile = {k: getattr(current_user, k, None) for k in (
+            "name", "age", "gender", "weight", "height", "target_weight",
+            "experience_level", "primary_goal", "workout_frequency",
+            "preferred_workout_duration", "dietary_preference",
+            "sleep_quality", "medical_conditions",
+        )}
+        coaching      = llm_coach.generate_coaching(session_json, focus=coach_focus, user_profile=user_profile)
         coaching_text = llm_coach.format_coaching_text(coaching)
         session_json["coaching"] = coaching
 
         import report_builder
-
         await loop.run_in_executor(
             None, report_builder.build_report, session_json, coaching_text, session_id
         )
@@ -292,24 +263,24 @@ async def analyze_session(
 
         logger.info(f"[{session_id}] Analysis complete ✓")
         return {
-            "session_id": session_id,
-            "pdf_url": f"/api/report/{session_id}",
-            "coaching": coaching,
+            "session_id":  session_id,
+            "pdf_url":     f"/api/report/{session_id}",
+            "coaching":    coaching,
             "session_summary": {
                 "total_duration_min": session_json["total_duration_min"],
-                "total_exercises": session_json["total_exercises"],
-                "total_reps": session_json["total_reps"],
-                "total_sets": session_json["total_sets"],
-                "avg_tempo_score": session_json["avg_tempo_score"],
+                "total_exercises":    session_json["total_exercises"],
+                "total_reps":         session_json["total_reps"],
+                "total_sets":         session_json["total_sets"],
+                "avg_tempo_score":    session_json["avg_tempo_score"],
             },
-            "timeline": session_json.get("timeline", []),
+            "timeline":  session_json.get("timeline",  []),
             "exercises": session_json.get("exercises", []),
         }
 
     except HTTPException:
         raise
     except Exception as exc:
-        logger.error(f"[{session_id}] Error: {exc}", exc_info=True)
+        logger.error(f"[{session_id}] {exc}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc))
     finally:
         try:
@@ -319,91 +290,75 @@ async def analyze_session(
             pass
 
 
-# ── Report download ───────────────────────────────────────────────────────────
+# ── Reports ───────────────────────────────────────────────────────────────────
 @app.get("/api/report/{session_id}")
 async def get_report(session_id: str):
-    pdf_path = os.path.join(REPORTS_DIR, f"{session_id}.pdf")
-    if not os.path.exists(pdf_path):
+    pdf = os.path.join(REPORTS_DIR, f"{session_id}.pdf")
+    if not os.path.exists(pdf):
         raise HTTPException(status_code=404, detail="Report not found")
-    return FileResponse(
-        pdf_path,
-        media_type="application/pdf",
-        filename=f"GymSense_Report_{session_id[:8]}.pdf",
-    )
+    return FileResponse(pdf, media_type="application/pdf",
+                        filename=f"GymSense_Report_{session_id[:8]}.pdf")
 
 
 # ── Sessions ──────────────────────────────────────────────────────────────────
 @app.get("/api/sessions")
 async def list_sessions(current_user: UserOut = Depends(get_current_user)):
-    sessions_col = get_sessions_collection()
-    cursor = sessions_col.find(
+    col = get_sessions_collection()
+    cursor = col.find(
         {"user_id": current_user.id},
-        projection={
-            "session_id": 1, "session_date": 1, "total_duration_min": 1,
-            "total_exercises": 1, "total_reps": 1, "avg_tempo_score": 1, "coaching": 1,
-        },
+        projection={"session_id": 1, "session_date": 1, "total_duration_min": 1,
+                    "total_exercises": 1, "total_reps": 1, "avg_tempo_score": 1, "coaching": 1},
     ).sort("session_date", -1)
-
-    sessions = []
+    result = []
     async for doc in cursor:
-        sessions.append(
-            {
-                "session_id": doc.get("session_id"),
-                "session_date": doc.get("session_date", "Unknown"),
-                "total_duration_min": doc.get("total_duration_min", 0),
-                "total_exercises": doc.get("total_exercises", 0),
-                "total_reps": doc.get("total_reps", 0),
-                "avg_tempo_score": doc.get("avg_tempo_score", 0),
-                "coaching": doc.get("coaching", {}),
-            }
-        )
-    return sessions
+        result.append({
+            "session_id":        doc.get("session_id"),
+            "session_date":      doc.get("session_date", "Unknown"),
+            "total_duration_min": doc.get("total_duration_min", 0),
+            "total_exercises":    doc.get("total_exercises", 0),
+            "total_reps":         doc.get("total_reps", 0),
+            "avg_tempo_score":    doc.get("avg_tempo_score", 0),
+            "coaching":           doc.get("coaching", {}),
+        })
+    return result
 
 
 @app.get("/api/sessions/{session_id}")
-async def get_session_detail(
-    session_id: str, current_user: UserOut = Depends(get_current_user)
-):
-    sessions_col = get_sessions_collection()
-    doc = await sessions_col.find_one(
-        {"session_id": session_id, "user_id": current_user.id}
-    )
+async def get_session_detail(session_id: str, current_user: UserOut = Depends(get_current_user)):
+    col = get_sessions_collection()
+    doc = await col.find_one({"session_id": session_id, "user_id": current_user.id})
     if not doc:
         raise HTTPException(status_code=404, detail="Session not found")
     doc["_id"] = str(doc["_id"])
     return doc
 
 
-# ── Dashboard stats ───────────────────────────────────────────────────────────
+# ── Dashboard ─────────────────────────────────────────────────────────────────
 @app.get("/api/dashboard/stats")
 async def dashboard_stats(current_user: UserOut = Depends(get_current_user)):
-    sessions_col = get_sessions_collection()
+    col      = get_sessions_collection()
     pipeline = [
         {"$match": {"user_id": current_user.id}},
-        {
-            "$group": {
-                "_id": None,
-                "total_workouts": {"$sum": 1},
-                "total_duration": {"$sum": "$total_duration_min"},
-                "total_reps": {"$sum": "$total_reps"},
-                "muscle_groups": {"$push": "$muscle_groups_trained"},
-            }
-        },
+        {"$group": {
+            "_id": None,
+            "total_workouts": {"$sum": 1},
+            "total_duration": {"$sum": "$total_duration_min"},
+            "total_reps":     {"$sum": "$total_reps"},
+            "muscle_groups":  {"$push": "$muscle_groups_trained"},
+        }},
     ]
-    results = await sessions_col.aggregate(pipeline).to_list(length=1)
-    if not results:
+    rows = await col.aggregate(pipeline).to_list(length=1)
+    if not rows:
         return {"total_workouts": 0, "total_duration_min": 0, "total_reps": 0, "muscle_distribution": {}}
-
-    row = results[0]
+    row = rows[0]
     muscle_counts: dict = {}
-    for group_list in row.get("muscle_groups", []):
-        for muscle in (group_list or []):
-            muscle_counts[muscle] = muscle_counts.get(muscle, 0) + 1
-
+    for lst in row.get("muscle_groups", []):
+        for m in (lst or []):
+            muscle_counts[m] = muscle_counts.get(m, 0) + 1
     return {
-        "total_workouts": row["total_workouts"],
+        "total_workouts":    row["total_workouts"],
         "total_duration_min": round(row["total_duration"], 1),
-        "total_reps": row["total_reps"],
+        "total_reps":        row["total_reps"],
         "muscle_distribution": muscle_counts,
     }
 
@@ -414,9 +369,9 @@ from bson import ObjectId
 
 @app.get("/api/goals")
 async def list_goals(current_user: UserOut = Depends(get_current_user)):
-    goals_col = get_goals_collection()
-    cursor = goals_col.find({"user_id": current_user.id}).sort("created_at", -1)
-    goals = []
+    col    = get_goals_collection()
+    cursor = col.find({"user_id": current_user.id}).sort("created_at", -1)
+    goals  = []
     async for doc in cursor:
         doc["_id"] = str(doc["_id"])
         goals.append(doc)
@@ -425,21 +380,19 @@ async def list_goals(current_user: UserOut = Depends(get_current_user)):
 
 @app.post("/api/goals", status_code=201)
 async def create_goal(goal_data: dict, current_user: UserOut = Depends(get_current_user)):
-    goals_col = get_goals_collection()
-    goal_data["user_id"] = current_user.id
+    col = get_goals_collection()
+    goal_data["user_id"]    = current_user.id
     goal_data["created_at"] = datetime.utcnow().isoformat()
-    goal_data["completed"] = False
-    result = await goals_col.insert_one(goal_data)
+    goal_data["completed"]  = False
+    result = await col.insert_one(goal_data)
     goal_data["_id"] = str(result.inserted_id)
     return goal_data
 
 
 @app.put("/api/goals/{goal_id}")
-async def update_goal(
-    goal_id: str, goal_data: dict, current_user: UserOut = Depends(get_current_user)
-):
-    goals_col = get_goals_collection()
-    await goals_col.update_one(
+async def update_goal(goal_id: str, goal_data: dict, current_user: UserOut = Depends(get_current_user)):
+    col = get_goals_collection()
+    await col.update_one(
         {"_id": ObjectId(goal_id), "user_id": current_user.id},
         {"$set": goal_data},
     )
@@ -448,22 +401,18 @@ async def update_goal(
 
 @app.delete("/api/goals/{goal_id}")
 async def delete_goal(goal_id: str, current_user: UserOut = Depends(get_current_user)):
-    goals_col = get_goals_collection()
-    await goals_col.delete_one({"_id": ObjectId(goal_id), "user_id": current_user.id})
+    col = get_goals_collection()
+    await col.delete_one({"_id": ObjectId(goal_id), "user_id": current_user.id})
     return {"message": "Goal deleted"}
 
 
-# ── Serve frontend SPA ────────────────────────────────────────────────────────
+# ── Frontend SPA (only when dist folder present) ──────────────────────────────
 if os.path.isdir(FRONTEND_DIST):
-    app.mount(
-        "/assets",
-        StaticFiles(directory=os.path.join(FRONTEND_DIST, "assets")),
-        name="assets",
-    )
+    app.mount("/assets", StaticFiles(directory=os.path.join(FRONTEND_DIST, "assets")), name="assets")
 
     @app.get("/{full_path:path}")
     async def serve_frontend(full_path: str):
-        file_path = os.path.join(FRONTEND_DIST, full_path)
-        if os.path.isfile(file_path):
-            return FileResponse(file_path)
+        fp = os.path.join(FRONTEND_DIST, full_path)
+        if os.path.isfile(fp):
+            return FileResponse(fp)
         return FileResponse(os.path.join(FRONTEND_DIST, "index.html"))
