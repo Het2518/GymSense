@@ -53,8 +53,8 @@ logging.basicConfig(
 logger = logging.getLogger("gymsense")
 
 # ── Absolute directory paths — NEVER depend on CWD ────────────────────────────
-# Models are stored in backend/models/ (copied there for Render root=backend/ deploys)
-MODELS_DIR    = str(BACKEND_DIR / "models")
+# Models are stored in root models/
+MODELS_DIR    = str(Path(PROJECT_ROOT) / "models")
 SESSIONS_DIR  = str(BACKEND_DIR / "sessions")
 REPORTS_DIR   = str(BACKEND_DIR / "reports")
 TEMPLATE_PATH = str(BACKEND_DIR.parent / "templates" / "report.html")
@@ -127,10 +127,10 @@ def _load_model_sync() -> None:
     def _abs(env_key: str, default_name: str) -> str:
         val = os.environ.get(env_key, "")
         if val:
-            # Make relative env paths absolute relative to BACKEND_DIR
+            # Make relative env paths absolute relative to PROJECT_ROOT
             p = Path(val)
-            return str(p if p.is_absolute() else BACKEND_DIR / p)
-        return str(BACKEND_DIR / "models" / default_name)
+            return str(p if p.is_absolute() else Path(PROJECT_ROOT) / p)
+        return str(Path(PROJECT_ROOT) / "models" / default_name)
 
     mp = _abs("MODEL_WEIGHTS_PATH", "best_model.weights.h5")
     sp = _abs("SCALER_PATH",        "scaler.pkl")
@@ -172,11 +172,11 @@ def _load_model_sync() -> None:
 
         # ── Use best_model.keras (full saved model — no import train needed) ────
         # .keras bundles BOTH architecture + weights, so we don't need train.py at all.
-        keras_path = str(BACKEND_DIR / "models" / "best_model.keras")
+        keras_path = str(Path(PROJECT_ROOT) / "models" / "best_model.keras")
         env_keras  = os.environ.get("MODEL_KERAS_PATH", "")
         if env_keras:
             p = Path(env_keras)
-            keras_path = str(p if p.is_absolute() else BACKEND_DIR / p)
+            keras_path = str(p if p.is_absolute() else Path(PROJECT_ROOT) / p)
 
         logger.info(f"Keras model path: {keras_path}  exists={os.path.exists(keras_path)}")
 
@@ -278,9 +278,9 @@ async def analyze_session(
             status_code=503,
             detail=(
                 f"ML model not loaded. "
-                f"weights={os.path.exists(str(BACKEND_DIR/'models'/'best_model.weights.h5'))}, "
-                f"scaler={os.path.exists(str(BACKEND_DIR/'models'/'scaler.pkl'))}, "
-                f"encoder={os.path.exists(str(BACKEND_DIR/'models'/'label_encoder.pkl'))}, "
+                f"weights={os.path.exists(str(Path(PROJECT_ROOT)/'models'/'best_model.weights.h5'))}, "
+                f"scaler={os.path.exists(str(Path(PROJECT_ROOT)/'models'/'scaler.pkl'))}, "
+                f"encoder={os.path.exists(str(Path(PROJECT_ROOT)/'models'/'label_encoder.pkl'))}, "
                 f"models_dir={MODELS_DIR}"
             )
         )

@@ -62,7 +62,8 @@ export async function getMe() {
   const response = await fetch(`${API_BASE}/api/auth/me`, {
     headers: getAuthHeaders()
   });
-  if (!response.ok) throw new Error('Not authenticated');
+  if (response.status === 401) throw new Error('UNAUTHORIZED');
+  if (!response.ok) throw new Error('SERVER_ERROR');
   return response.json();
 }
 

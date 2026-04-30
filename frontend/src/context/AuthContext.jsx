@@ -21,7 +21,9 @@ export function AuthProvider({ children }) {
           setUser(userData);
         } catch (err) {
           console.error("Failed to load user:", err);
-          logout();
+          if (err.message === 'UNAUTHORIZED') {
+            logout();
+          }
         }
       }
       setLoading(false);
