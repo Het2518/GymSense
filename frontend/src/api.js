@@ -1,7 +1,13 @@
 // === FILE: src/api.js ===
-// GymSense AI — API client with Auth
+// GymSense AI — API client
+//
+// Backend resolution order:
+//   1. VITE_API_URL env variable (set in .env / .env.production)
+//   2. Falls back to '' (relative URLs, handled by Vite dev-server proxy → localhost:8000)
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
+
+console.log(`[API] Backend: ${API_BASE || 'relative (proxy → localhost:8000)'}`);
 
 function getAuthHeaders(isFormData = false) {
   const token = localStorage.getItem('gymsense_token');
