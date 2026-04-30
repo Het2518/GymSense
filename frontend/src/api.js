@@ -6,7 +6,7 @@
 //   2. Hardcoded Render fallback (production safety net)
 //   3. Empty string = relative URL → Vite dev proxy → localhost:8000
 
-const RENDER_URL = 'https://gymsense-h.onrender.com';
+const RENDER_URL = 'https://gymsense-j.onrender.com';
 const API_BASE = import.meta.env.VITE_API_URL
   || (typeof window !== 'undefined' && window.location.hostname !== 'localhost' ? RENDER_URL : '');
 
