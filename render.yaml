@@ -20,7 +20,7 @@ services:
     buildCommand: pip install --upgrade pip && pip install -r backend/requirements.txt
 
     # Start — runs from project root, imports backend.main
-    startCommand: gunicorn backend.main:app --workers 1 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT --timeout 120 --keep-alive 5 --graceful-timeout 30 --log-level info --access-logfile - --error-logfile -
+    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT --timeout-keep-alive 60
 
     healthCheckPath: /api/health
 
