@@ -202,6 +202,7 @@ def _load_model_sync() -> None:
         if not model_loaded:
             if not os.path.exists(mp):
                 logger.warning(f"Neither working .keras nor .h5 model found — ML disabled")
+                state["last_error"] = "Neither working .keras nor .h5 model found"
                 return
             logger.warning("Attempting weights-only load (requires train.py)")
             try:
@@ -216,6 +217,7 @@ def _load_model_sync() -> None:
                 model_loaded = True
             except Exception as exc2:
                 logger.error(f"Weights-only load also failed: {exc2}", exc_info=True)
+                state["last_error"] = f"Weights load failed: {str(exc2)}"
                 return
 
         state["model_loaded"] = True
@@ -223,6 +225,7 @@ def _load_model_sync() -> None:
 
     except Exception as exc:
         logger.error(f"ML load failed: {exc}", exc_info=True)
+        state["last_error"] = f"ML load failed: {str(exc)}"
 
 
 # ── App ───────────────────────────────────────────────────────────────────────
@@ -279,11 +282,12 @@ async def analyze_session(
 ):
     await _ensure_model_loaded()
 
-    if not state["model_loaded"]:
+    if not state.get("model_loaded"):
+        err = state.get("last_error", "Unknown error")
         raise HTTPException(
             status_code=503,
             detail=(
-                f"ML model not loaded. "
+                f"ML model not loaded. Error: {err} | "
                 f"weights={os.path.exists(str(Path(PROJECT_ROOT)/'models'/'best_model.weights.h5'))}, "
                 f"scaler={os.path.exists(str(Path(PROJECT_ROOT)/'models'/'scaler.pkl'))}, "
                 f"encoder={os.path.exists(str(Path(PROJECT_ROOT)/'models'/'label_encoder.pkl'))}, "

@@ -1,16 +1,11 @@
 // === FILE: src/api.js ===
 // GymSense AI — API client
-//
-// Backend resolution order:
-//   1. VITE_API_URL env variable (baked in at build time via .env.production)
-//   2. Hardcoded Render fallback (production safety net)
-//   3. Empty string = relative URL → Vite dev proxy → localhost:8000
 
 const RENDER_URL = 'https://gymsense-j.onrender.com';
 const API_BASE = import.meta.env.VITE_API_URL
   || (typeof window !== 'undefined' && window.location.hostname !== 'localhost' ? RENDER_URL : '');
 
-console.log(`[API] Backend: ${API_BASE || 'relative proxy (dev)'}`);
+console.log(`[API] Backend Base URL: ${API_BASE || 'relative proxy (dev)'}`);
 
 function getAuthHeaders(isFormData = false) {
   const token = localStorage.getItem('gymsense_token');
@@ -24,6 +19,44 @@ function getAuthHeaders(isFormData = false) {
   return headers;
 }
 
+// Global fetch wrapper for comprehensive logging
+async function doFetch(endpoint, options = {}, expectBlob = false) {
+  const url = `${API_BASE}${endpoint}`;
+  const method = options.method || 'GET';
+  
+  // Log request
+  console.log(`[API REQUEST] ${method} ${endpoint}`, options.body instanceof FormData ? '(FormData)' : (options.body || ''));
+
+  let response;
+  try {
+    response = await fetch(url, options);
+  } catch (err) {
+    console.error(`[API NETWORK ERROR] ${method} ${endpoint} =>`, err);
+    throw err;
+  }
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    console.error(`[API ERROR] ${method} ${endpoint} => HTTP ${response.status}\nRaw Error Text:`, errorText);
+    let detail = `HTTP ${response.status}`;
+    try {
+      const errObj = JSON.parse(errorText);
+      detail = errObj.detail || detail;
+    } catch (e) {}
+    throw new Error(detail);
+  }
+
+  if (expectBlob) {
+    const blob = await response.blob();
+    console.log(`[API SUCCESS] ${method} ${endpoint} => Blob(size: ${blob.size})`);
+    return blob;
+  }
+
+  const data = await response.json();
+  console.log(`[API SUCCESS] ${method} ${endpoint} =>`, data);
+  return data;
+}
+
 // --- Auth Endpoints ---
 
 export async function login(email, password) {
@@ -31,53 +64,33 @@ export async function login(email, password) {
   formData.append('username', email); // OAuth2PasswordBearer uses 'username'
   formData.append('password', password);
 
-  const response = await fetch(`${API_BASE}/api/auth/login`, {
+  return doFetch('/api/auth/login', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: formData.toString()
   });
-
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({ detail: 'Login failed' }));
-    throw new Error(err.detail);
-  }
-  return response.json();
 }
 
 export async function register(name, email, password) {
-  const response = await fetch(`${API_BASE}/api/auth/register`, {
+  return doFetch('/api/auth/register', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name, email, password })
   });
-
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({ detail: 'Registration failed' }));
-    throw new Error(err.detail);
-  }
-  return response.json();
 }
 
 export async function getMe() {
-  const response = await fetch(`${API_BASE}/api/auth/me`, {
+  return doFetch('/api/auth/me', {
     headers: getAuthHeaders()
   });
-  if (response.status === 401) throw new Error('UNAUTHORIZED');
-  if (!response.ok) throw new Error('SERVER_ERROR');
-  return response.json();
 }
 
 export async function updateProfile(profileData) {
-  const response = await fetch(`${API_BASE}/api/auth/profile`, {
+  return doFetch('/api/auth/profile', {
     method: 'PUT',
     headers: getAuthHeaders(),
     body: JSON.stringify(profileData)
   });
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({ detail: 'Failed to update profile' }));
-    throw new Error(err.detail);
-  }
-  return response.json();
 }
 
 // --- App Endpoints ---
@@ -87,99 +100,67 @@ export async function analyzeSession(file, coachFocus) {
   formData.append('file', file);
   formData.append('coach_focus', coachFocus || 'general');
 
-  const response = await fetch(`${API_BASE}/api/analyze`, {
+  return doFetch('/api/analyze', {
     method: 'POST',
     headers: getAuthHeaders(true),
     body: formData,
   });
-
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({ detail: 'Unknown error' }));
-    throw new Error(err.detail || `HTTP ${response.status}`);
-  }
-
-  return response.json();
 }
 
 export async function getReport(sessionId) {
-  const response = await fetch(`${API_BASE}/api/report/${sessionId}`, {
+  return doFetch(`/api/report/${sessionId}`, {
     headers: getAuthHeaders()
-  });
-  if (!response.ok) throw new Error('Report not found');
-  return response.blob();
+  }, true); // expectBlob = true
 }
 
 export async function getSessions() {
-  const response = await fetch(`${API_BASE}/api/sessions`, {
+  return doFetch('/api/sessions', {
     headers: getAuthHeaders()
   });
-  if (!response.ok) throw new Error('Failed to fetch sessions');
-  return response.json();
 }
 
 export async function getDashboardStats() {
-  const response = await fetch(`${API_BASE}/api/dashboard/stats`, {
+  return doFetch('/api/dashboard/stats', {
     headers: getAuthHeaders()
   });
-  if (!response.ok) throw new Error('Failed to fetch stats');
-  return response.json();
 }
 
 export async function checkHealth() {
-  const response = await fetch(`${API_BASE}/api/health`);
-  if (!response.ok) throw new Error('Backend unreachable');
-  return response.json();
+  return doFetch('/api/health');
 }
 
 export async function getSessionDetail(sessionId) {
-  console.log(`[API] getSessionDetail: ${sessionId}`);
-  const response = await fetch(`${API_BASE}/api/sessions/${sessionId}`, {
+  return doFetch(`/api/sessions/${sessionId}`, {
     headers: getAuthHeaders()
   });
-  if (!response.ok) throw new Error('Session not found');
-  return response.json();
 }
 
 export async function getGoals() {
-  const response = await fetch(`${API_BASE}/api/goals`, {
+  return doFetch('/api/goals', {
     headers: getAuthHeaders()
   });
-  if (!response.ok) throw new Error('Failed to fetch goals');
-  return response.json();
 }
 
 export async function saveGoal(goalData) {
-  const response = await fetch(`${API_BASE}/api/goals`, {
+  return doFetch('/api/goals', {
     method: 'POST',
     headers: getAuthHeaders(),
     body: JSON.stringify(goalData)
   });
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({ detail: 'Failed to save goal' }));
-    throw new Error(err.detail);
-  }
-  return response.json();
 }
 
 export async function updateGoal(goalId, goalData) {
-  const response = await fetch(`${API_BASE}/api/goals/${goalId}`, {
+  return doFetch(`/api/goals/${goalId}`, {
     method: 'PUT',
     headers: getAuthHeaders(),
     body: JSON.stringify(goalData)
   });
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({ detail: 'Failed to update goal' }));
-    throw new Error(err.detail);
-  }
-  return response.json();
 }
 
 export async function deleteGoal(goalId) {
-  const response = await fetch(`${API_BASE}/api/goals/${goalId}`, {
+  return doFetch(`/api/goals/${goalId}`, {
     method: 'DELETE',
     headers: getAuthHeaders()
   });
-  if (!response.ok) throw new Error('Failed to delete goal');
-  return response.json();
 }
 
