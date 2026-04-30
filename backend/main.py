@@ -81,69 +81,77 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning(f"Index creation skipped: {exc}")
 
-    # 3. ML model — wrapped so a crash here never prevents the server from starting
-    try:
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, _load_model_sync)
-    except Exception as exc:
-        logger.warning(f"ML model loading skipped: {exc}")
-
+    # ML model loaded lazily on first /api/analyze call — keeps startup fast
     logger.info("GymSense backend startup complete ✓")
     yield
     logger.info("GymSense backend shutting down …")
 
 
-def _load_model_sync():
-    """Loads TF model in a thread pool. Completely optional — server works without it."""
-    try:
-        import joblib
-        import tensorflow as tf
-    except ImportError:
-        logger.warning("tensorflow/joblib not installed — ML features disabled")
+_model_load_lock = asyncio.Lock() if False else None  # initialised below
+
+
+async def _ensure_model_loaded():
+    """Lazy-load ML model on first call. Thread-safe via asyncio.Lock."""
+    global _model_load_lock
+    if _model_load_lock is None:
+        _model_load_lock = asyncio.Lock()
+
+    if state["model_loaded"]:
         return
 
-    gpus = tf.config.list_physical_devices("GPU")
-    if gpus:
-        for gpu in gpus:
-            tf.config.experimental.set_memory_growth(gpu, True)
-        state["gpu_available"] = True
-        state["gpu_name"] = gpus[0].name
-        logger.info(f"GPU found: {gpus[0].name}")
-    else:
-        logger.info("No GPU — using CPU for inference")
+    async with _model_load_lock:
+        if state["model_loaded"]:  # double-check after acquiring lock
+            return
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, _load_model_sync)
 
-    model_path = os.environ.get(
-        "MODEL_WEIGHTS_PATH", os.path.join(MODELS_DIR, "best_model.weights.h5")
-    )
-    scaler_path = os.environ.get("SCALER_PATH", os.path.join(MODELS_DIR, "scaler.pkl"))
-    le_path = os.environ.get(
-        "LABEL_ENCODER_PATH", os.path.join(MODELS_DIR, "label_encoder.pkl")
-    )
 
-    if os.path.exists(scaler_path):
-        state["scaler"] = joblib.load(scaler_path)
-        logger.info("Scaler loaded ✓")
-    if os.path.exists(le_path):
-        state["le"] = joblib.load(le_path)
-        logger.info("Label encoder loaded ✓")
+def _load_model_sync():
+    """Synchronous ML loading — runs in thread pool, never on event loop."""
+    try:
+        import joblib
+    except ImportError:
+        logger.warning("joblib not installed — ML disabled")
+        return
+    try:
+        import tensorflow as tf
+    except ImportError:
+        logger.warning("tensorflow not installed — ML disabled")
+        return
+    except Exception as exc:
+        logger.warning(f"tensorflow import failed: {exc} — ML disabled")
+        return
 
-    if os.path.exists(model_path) and state["le"]:
-        try:
+    try:
+        gpus = tf.config.list_physical_devices("GPU")
+        if gpus:
+            for gpu in gpus:
+                tf.config.experimental.set_memory_growth(gpu, True)
+            state["gpu_available"] = True
+            state["gpu_name"] = gpus[0].name
+
+        model_path = os.environ.get("MODEL_WEIGHTS_PATH", os.path.join(MODELS_DIR, "best_model.weights.h5"))
+        scaler_path = os.environ.get("SCALER_PATH", os.path.join(MODELS_DIR, "scaler.pkl"))
+        le_path = os.environ.get("LABEL_ENCODER_PATH", os.path.join(MODELS_DIR, "label_encoder.pkl"))
+
+        if os.path.exists(scaler_path):
+            state["scaler"] = joblib.load(scaler_path)
+        if os.path.exists(le_path):
+            state["le"] = joblib.load(le_path)
+
+        if os.path.exists(model_path) and state["le"]:
             import train
-
             n_classes = len(state["le"].classes_)
             state["model"] = train.build_hybrid_model(
-                n_classes=n_classes, n_channels=7, window_size=80,
-                n_windows=4, sensor_mode="combine",
+                n_classes=n_classes, n_channels=7, window_size=80, n_windows=4, sensor_mode="combine"
             )
             state["model"].load_weights(model_path)
-            logger.info("Model weights loaded ✓")
-        except Exception as exc:
-            logger.warning(f"Model load failed (ML disabled): {exc}")
 
-    if state["model"] and state["scaler"] and state["le"]:
-        state["model_loaded"] = True
-        logger.info("All ML artifacts ready ✓")
+        if state["model"] and state["scaler"] and state["le"]:
+            state["model_loaded"] = True
+            logger.info("All ML artifacts loaded ✓")
+    except Exception as exc:
+        logger.warning(f"ML model load failed (ML disabled): {exc}")
 
 
 # ── CORS origins ──────────────────────────────────────────────────────────────
@@ -214,10 +222,13 @@ async def analyze_session(
     current_user: UserOut = Depends(get_current_user),
 ):
     """Full session analysis pipeline (JWT-protected)."""
+    # Lazy-load ML model on first request
+    await _ensure_model_loaded()
+
     if not state["model_loaded"]:
         raise HTTPException(
             status_code=503,
-            detail="Model not loaded. Train the model first (python train.py).",
+            detail="Model not loaded. Model files (best_model.weights.h5, scaler.pkl, label_encoder.pkl) not found on server.",
         )
 
     session_id = str(uuid.uuid4())
