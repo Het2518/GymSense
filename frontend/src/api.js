@@ -2,12 +2,15 @@
 // GymSense AI — API client
 //
 // Backend resolution order:
-//   1. VITE_API_URL env variable (set in .env / .env.production)
-//   2. Falls back to '' (relative URLs, handled by Vite dev-server proxy → localhost:8000)
+//   1. VITE_API_URL env variable (baked in at build time via .env.production)
+//   2. Hardcoded Render fallback (production safety net)
+//   3. Empty string = relative URL → Vite dev proxy → localhost:8000
 
-const API_BASE = import.meta.env.VITE_API_URL || '';
+const RENDER_URL = 'https://gymsense-1.onrender.com';
+const API_BASE = import.meta.env.VITE_API_URL
+  || (typeof window !== 'undefined' && window.location.hostname !== 'localhost' ? RENDER_URL : '');
 
-console.log(`[API] Backend: ${API_BASE || 'relative (proxy → localhost:8000)'}`);
+console.log(`[API] Backend: ${API_BASE || 'relative proxy (dev)'}`);
 
 function getAuthHeaders(isFormData = false) {
   const token = localStorage.getItem('gymsense_token');
