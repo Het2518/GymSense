@@ -58,20 +58,18 @@ os.makedirs(REPORTS_DIR, exist_ok=True)
 # ──────────────────────────────────────────────
 app = FastAPI(title='GymSense AI SaaS', version='2.0.0')
 
-# CORS — explicit origins for security (wildcard + credentials is blocked by browsers)
-# Add any new deployment URLs to the ALLOWED_ORIGINS env var (comma-separated)
-_raw_origins = os.environ.get(
-    'ALLOWED_ORIGINS',
-    'http://localhost:3000,http://localhost:5173,http://127.0.0.1:3000,'
-    'https://gym-sense-orcin.vercel.app,https://gymsense-ih77.onrender.com'
-)
-ALLOWED_ORIGINS = [o.strip() for o in _raw_origins.split(',') if o.strip()]
+# CORS — wildcard works fine for Bearer-token auth (no cookies used)
+_raw_origins = os.environ.get('ALLOWED_ORIGINS', '*')
+if _raw_origins.strip() == '*':
+    ALLOWED_ORIGINS = ['*']
+else:
+    ALLOWED_ORIGINS = [o.strip() for o in _raw_origins.split(',') if o.strip()]
 logger.info(f"CORS allowed origins: {ALLOWED_ORIGINS}")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
-    allow_credentials=True,
+    allow_origins=ALLOWED_ORIGINS,   # '*' works because allow_credentials is False
+    allow_credentials=False,         # Bearer tokens don't need this; cookies would
     allow_methods=['*'],
     allow_headers=['*'],
     expose_headers=['Content-Disposition'],
