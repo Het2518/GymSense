@@ -2,8 +2,11 @@
 // GymSense AI — API client
 
 const RENDER_URL = 'https://gymsense-j.onrender.com';
-const API_BASE = import.meta.env.VITE_API_URL
-  || (typeof window !== 'undefined' && window.location.hostname !== 'localhost' ? RENDER_URL : '');
+
+// Force use of RENDER_URL in production, ignoring any incorrect Vercel environment variables
+const API_BASE = (typeof window !== 'undefined' && window.location.hostname === 'localhost')
+  ? ''
+  : RENDER_URL;
 
 console.log(`[API] Backend Base URL: ${API_BASE || 'relative proxy (dev)'}`);
 
