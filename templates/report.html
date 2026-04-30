@@ -1,0 +1,315 @@
+<!-- === FILE: templates/report.html === -->
+<!-- GymSense AI — Clinical Diagnostic Report Template (xhtml2pdf) -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>GymSense AI Diagnostic Report</title>
+<style>
+  @page {
+    size: A4;
+    margin: 2cm 1.5cm;
+    @frame header {
+      -pdf-frame-content: header_content;
+      top: 1cm;
+      margin-left: 1.5cm;
+      margin-right: 1.5cm;
+    }
+    @frame footer {
+      -pdf-frame-content: footer_content;
+      bottom: 1cm;
+      margin-left: 1.5cm;
+      margin-right: 1.5cm;
+      height: 1cm;
+    }
+  }
+
+  body {
+    font-family: "Helvetica", "Arial", sans-serif;
+    color: #2b2b2b;
+    font-size: 10pt;
+    line-height: 1.4;
+  }
+
+  h1, h2, h3, h4 {
+    font-family: "Times New Roman", Times, serif;
+    color: #1a365d;
+    margin-bottom: 8px;
+  }
+
+  /* --- Header & Demographics --- */
+  .report-header {
+    border-bottom: 2px solid #1a365d;
+    padding-bottom: 10px;
+    margin-bottom: 20px;
+  }
+  .report-title {
+    font-size: 24pt;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin: 0;
+  }
+  .report-subtitle {
+    font-size: 11pt;
+    color: #4a5568;
+    margin: 4px 0 0 0;
+  }
+
+  .demographics-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 25px;
+    font-size: 9.5pt;
+  }
+  .demographics-table td {
+    padding: 6px;
+    border: 1px solid #e2e8f0;
+  }
+  .demographics-table .label {
+    background-color: #f8fafc;
+    font-weight: bold;
+    width: 20%;
+    color: #4a5568;
+  }
+  .demographics-table .value {
+    width: 30%;
+  }
+
+  /* --- Sections --- */
+  .section-title {
+    font-size: 14pt;
+    border-bottom: 1px solid #cbd5e1;
+    padding-bottom: 4px;
+    margin-top: 25px;
+    margin-bottom: 15px;
+    color: #2d3748;
+    text-transform: uppercase;
+  }
+
+  /* --- Metrics Grid --- */
+  .metrics-grid {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 20px;
+  }
+  .metrics-grid td {
+    width: 25%;
+    text-align: center;
+    padding: 10px;
+    border: 1px solid #e2e8f0;
+  }
+  .metric-value {
+    font-size: 18pt;
+    font-weight: bold;
+    color: #1a365d;
+  }
+  .metric-label {
+    font-size: 8pt;
+    color: #718096;
+    text-transform: uppercase;
+    margin-top: 4px;
+  }
+
+  /* --- Timeline --- */
+  .timeline-container {
+    margin: 15px 0;
+    padding: 10px;
+    background-color: #f8fafc;
+    border: 1px solid #e2e8f0;
+  }
+  .legend {
+    margin-top: 10px;
+    font-size: 8pt;
+  }
+  .legend-item {
+    display: inline-block;
+    margin-right: 15px;
+  }
+  .legend-color {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border: 1px solid #cbd5e1;
+    margin-right: 4px;
+  }
+
+  /* --- Exercises Table --- */
+  .exercise-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 9pt;
+    margin-bottom: 20px;
+  }
+  .exercise-table th {
+    background-color: #f1f5f9;
+    color: #4a5568;
+    font-weight: bold;
+    text-align: left;
+    padding: 8px;
+    border-bottom: 2px solid #cbd5e1;
+  }
+  .exercise-table td {
+    padding: 8px;
+    border-bottom: 1px solid #e2e8f0;
+    vertical-align: middle;
+  }
+  .flag-warning {
+    color: #c53030;
+    font-weight: bold;
+  }
+
+  /* --- Prescription / Coaching --- */
+  .prescription-box {
+    border: 1px solid #cbd5e1;
+    padding: 15px;
+    background-color: #fff;
+    margin-top: 15px;
+    page-break-inside: avoid;
+  }
+  .prescription-text {
+    font-family: "Courier New", Courier, monospace;
+    font-size: 9pt;
+    white-space: pre-wrap;
+    color: #2d3748;
+  }
+
+  /* --- Footer --- */
+  .footer-text {
+    font-size: 8pt;
+    color: #a0aec0;
+    text-align: center;
+    border-top: 1px solid #e2e8f0;
+    padding-top: 5px;
+  }
+  .page-number:before {
+    content: "Page " counter(page);
+  }
+</style>
+</head>
+<body>
+
+  <!-- Static Header for all pages -->
+  <div id="header_content">
+    <div style="text-align: right; font-size: 8pt; color: #a0aec0;">GymSense AI Diagnostics • Strictly Confidential</div>
+  </div>
+
+  <!-- Static Footer for all pages -->
+  <div id="footer_content" class="footer-text">
+    <table width="100%">
+      <tr>
+        <td width="33%" align="left">Report ID: {{ session_id|default('N/A') }}</td>
+        <td width="33%" align="center">Generated automatically via AI Pipeline</td>
+        <td width="33%" align="right"><span class="page-number"></span></td>
+      </tr>
+    </table>
+  </div>
+
+  <!-- Main Content -->
+  <div class="report-header">
+    <h1 class="report-title">Diagnostic Workout Report</h1>
+    <p class="report-subtitle">Kinematic Analysis & AI Coaching Assessment</p>
+  </div>
+
+  <!-- Demographics -->
+  <table class="demographics-table">
+    <tr>
+      <td class="label">Patient / Subject ID</td>
+      <td class="value"><strong>{{ user_name|default('Anonymous') }}</strong> ({{ user_id|default('N/A') }})</td>
+      <td class="label">Session Date</td>
+      <td class="value"><strong>{{ session_date }}</strong></td>
+    </tr>
+    <tr>
+      <td class="label">Total Duration</td>
+      <td class="value">{{ total_duration_min|round(1) }} Minutes</td>
+      <td class="label">Muscles Targeted</td>
+      <td class="value">{{ muscle_groups_trained | join(', ') | default('None') }}</td>
+    </tr>
+  </table>
+
+  <!-- Primary Metrics -->
+  <h2 class="section-title">1. Quantitative Metrics summary</h2>
+  <table class="metrics-grid">
+    <tr>
+      <td>
+        <div class="metric-value">{{ total_exercises }}</div>
+        <div class="metric-label">Exercises</div>
+      </td>
+      <td>
+        <div class="metric-value">{{ total_reps }}</div>
+        <div class="metric-label">Total Repetitions</div>
+      </td>
+      <td>
+        <div class="metric-value">{{ avg_tempo_score|round|int }} / 100</div>
+        <div class="metric-label">Mean Tempo Score</div>
+      </td>
+      <td>
+        <div class="metric-value">{{ (total_duration_min * 60 / total_reps)|round(1) if total_reps > 0 else 0 }}s</div>
+        <div class="metric-label">Avg Sec / Rep</div>
+      </td>
+    </tr>
+  </table>
+
+  <!-- Activity Timeline -->
+  <h2 class="section-title">2. Kinematic Activity Timeline</h2>
+  <div class="timeline-container">
+    {{ timeline_svg | safe }}
+    <div class="legend">
+      {% for name, color in exercise_colors.items() %}
+      <div class="legend-item">
+        <span class="legend-color" style="background-color: {{ color }};"></span> {{ name }}
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <!-- Diagnostic Breakdown -->
+  <h2 class="section-title">3. Exercise Diagnostics</h2>
+  <table class="exercise-table">
+    <thead>
+      <tr>
+        <th>Exercise</th>
+        <th>Time</th>
+        <th>Sets x Reps</th>
+        <th>Tempo</th>
+        <th>Diagnostic Flags</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for ex in exercises %}
+      <tr>
+        <td><strong>{{ ex.name }}</strong></td>
+        <td>{{ ex.start_time }} - {{ ex.end_time }}</td>
+        <td>{{ ex.sets }} sets ({{ ex.reps_per_set | join(', ') }})</td>
+        <td>
+          {{ ex.tempo_gauge_svg | safe }}
+        </td>
+        <td>
+          {% if ex.fatigue_detected %}
+            <span class="flag-warning">⚠ Fatigue at Rep {{ ex.fatigue_onset_rep }}</span><br>
+          {% endif %}
+          {% if ex.rest_flags and ex.rest_flags|reject('in', ['ok', 'n/a'])|list %}
+            <span class="flag-warning">⚠ Inconsistent Rest</span>
+          {% endif %}
+          {% if not ex.fatigue_detected and not (ex.rest_flags and ex.rest_flags|reject('in', ['ok', 'n/a'])|list) %}
+            <span style="color: #38a169;">Normal Findings</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <!-- AI Prescription -->
+  <h2 class="section-title">4. Clinical Coaching & Prescription</h2>
+  <div class="prescription-box">
+    <div class="prescription-text">{{ coaching_text }}</div>
+  </div>
+
+  <div style="margin-top: 40px; text-align: right;">
+    <p style="border-top: 1px solid #2b2b2b; display: inline-block; padding-top: 5px; width: 250px; text-align: center;">
+      Authorized by GymSense AI Engine
+    </p>
+  </div>
+
+</body>
+</html>

@@ -1,0 +1,121 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Design tokens ── */
+:root {
+  --bg:       248 250 252;
+  --surface:  255 255 255;
+  --surface2: 241 245 249;
+  --border:   226 232 240;
+  --text:     15  23  42;
+  --muted:    100 116 139;
+  --primary:  99  102 241;
+  --primary-bg: 238 242 255;
+}
+.dark {
+  --bg:       9   9   11;
+  --surface:  24  24  27;
+  --surface2: 39  39  42;
+  --border:   63  63  70;
+  --text:     250 250 250;
+  --muted:    161 161 170;
+  --primary:  129 140 248;
+  --primary-bg: 30  27  75;
+}
+
+@layer base {
+  html { @apply transition-colors duration-300; color-scheme: light; }
+  html.dark { color-scheme: dark; }
+  body {
+    background-color: rgb(var(--bg));
+    color: rgb(var(--text));
+    @apply antialiased font-sans;
+  }
+}
+
+@layer components {
+  /* Card */
+  .card {
+    background-color: rgb(var(--surface));
+    border: 1px solid rgb(var(--border));
+    @apply rounded-2xl shadow-sm;
+  }
+  .card-hover {
+    @apply card transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md cursor-pointer;
+  }
+
+  /* Inputs */
+  .input-field {
+    background-color: rgb(var(--surface));
+    border: 1px solid rgb(var(--border));
+    color: rgb(var(--text));
+    @apply w-full rounded-xl px-4 py-2.5 text-sm
+           focus:outline-none focus:ring-2 focus:ring-primary-500/30 focus:border-primary-500
+           transition-all duration-150 placeholder:text-slate-400 dark:placeholder:text-zinc-600;
+  }
+  select.input-field {
+    @apply appearance-none;
+  }
+
+  /* Buttons */
+  .btn-primary {
+    @apply inline-flex items-center gap-2 bg-primary-600 hover:bg-primary-700
+           dark:bg-primary-500 dark:hover:bg-primary-600
+           text-white font-semibold text-sm px-5 py-2.5 rounded-xl shadow-sm
+           hover:shadow-md hover:-translate-y-px transition-all duration-150
+           disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none;
+  }
+  .btn-ghost {
+    background-color: rgb(var(--surface2));
+    color: rgb(var(--text));
+    @apply inline-flex items-center gap-2 font-medium text-sm
+           px-4 py-2 rounded-xl hover:opacity-75 transition-all duration-150;
+  }
+  .btn-outline {
+    border: 1px solid rgb(var(--border));
+    color: rgb(var(--text));
+    @apply inline-flex items-center gap-2 font-medium text-sm bg-transparent
+           px-4 py-2 rounded-xl hover:bg-primary-500/10 transition-all duration-150;
+  }
+
+  /* Labels */
+  .label {
+    color: rgb(var(--muted));
+    @apply block text-xs font-semibold uppercase tracking-wider mb-1.5;
+  }
+
+  /* Page scaffolding */
+  .page-wrap   { @apply max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-10; }
+  .page-title  { @apply text-2xl font-bold tracking-tight; color: rgb(var(--text)); }
+  .page-sub    { @apply text-sm mt-1; color: rgb(var(--muted)); }
+
+  /* Hint / info box */
+  .hint {
+    background-color: rgba(var(--primary), 0.08);
+    border: 1px solid rgba(var(--primary), 0.18);
+    @apply rounded-xl p-4 text-sm;
+    color: rgb(var(--text));
+  }
+
+  /* Stat badge */
+  .badge {
+    @apply inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-lg;
+  }
+  .badge-green  { @apply badge bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400; }
+  .badge-red    { @apply badge bg-rose-100    text-rose-700    dark:bg-rose-900/40    dark:text-rose-400; }
+  .badge-blue   { @apply badge bg-blue-100   text-blue-700    dark:bg-blue-900/40    dark:text-blue-400; }
+  .badge-indigo { @apply badge bg-primary-100 text-primary-700 dark:bg-primary-900/40 dark:text-primary-400; }
+}
+
+/* Scrollbars */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { @apply bg-slate-300 dark:bg-zinc-700 rounded-full; }
+
+/* Recharts dark overrides */
+.dark .recharts-cartesian-grid-horizontal line,
+.dark .recharts-cartesian-grid-vertical   line { stroke: #3f3f46; }
+.dark .recharts-text { fill: #a1a1aa; }
