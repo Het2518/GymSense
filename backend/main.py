@@ -169,19 +169,41 @@ def _load_model_sync() -> None:
         state["le"] = joblib.load(lp)
         logger.info("Label encoder loaded ✓")
 
-        if not os.path.exists(mp):
-            logger.warning(f"Weights not found: {mp}")
-            return
+        # ── Use best_model.keras (full saved model — no import train needed) ────
+        # .keras bundles BOTH architecture + weights, so we don't need train.py at all.
+        keras_path = str(BACKEND_DIR / "models" / "best_model.keras")
+        env_keras  = os.environ.get("MODEL_KERAS_PATH", "")
+        if env_keras:
+            p = Path(env_keras)
+            keras_path = str(p if p.is_absolute() else BACKEND_DIR / p)
 
-        import train
-        n_classes = len(state["le"].classes_)
-        state["model"] = train.build_hybrid_model(
-            n_classes=n_classes, n_channels=7,
-            window_size=80, n_windows=4, sensor_mode="combine",
-        )
-        state["model"].load_weights(mp)
+        logger.info(f"Keras model path: {keras_path}  exists={os.path.exists(keras_path)}")
+
+        if not os.path.exists(keras_path):
+            # Fallback: try weights-only approach with .h5 file
+            if not os.path.exists(mp):
+                logger.warning(f"Neither .keras nor .h5 model found — ML disabled")
+                return
+            logger.warning(".keras not found, attempting weights-only load (requires train.py)")
+            try:
+                import train
+                n_classes    = len(state["le"].classes_)
+                state["model"] = train.build_hybrid_model(
+                    n_classes=n_classes, n_channels=7,
+                    window_size=80, n_windows=4, sensor_mode="combine",
+                )
+                state["model"].load_weights(mp)
+                logger.info("Weights-only load succeeded ✓")
+            except Exception as exc2:
+                logger.error(f"Weights-only load also failed: {exc2}", exc_info=True)
+                return
+        else:
+            # Primary path: load full .keras model — self-contained, no train.py
+            state["model"] = tf.keras.models.load_model(keras_path)
+            logger.info("Full .keras model loaded ✓")
+
         state["model_loaded"] = True
-        logger.info("All ML artifacts loaded ✓  model_loaded=True")
+        logger.info("All ML artifacts ready ✓  model_loaded=True")
 
     except Exception as exc:
         logger.error(f"ML load failed: {exc}", exc_info=True)
