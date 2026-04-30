@@ -138,8 +138,14 @@ def process_session(csv_path, model, scaler, le):
 
     X = np.array(windows).reshape(-1, 1, WINDOW_SIZE, n_channels)
 
-    # 5. Inference: batch predict (reduced batch_size to prevent OOM on Render Free Tier)
-    y_probs = model.predict(X, batch_size=32, verbose=0)
+    # 5. Inference: manual batching to prevent TF OOM on Render Free Tier (512MB RAM)
+    y_probs_list = []
+    batch_size = 16
+    for i in range(0, len(X), batch_size):
+        batch_X = X[i:i+batch_size]
+        batch_probs = model(batch_X, training=False)
+        y_probs_list.append(batch_probs.numpy())
+    y_probs = np.vstack(y_probs_list)
     y_pred = np.argmax(y_probs, axis=1)
 
     # Decode labels
