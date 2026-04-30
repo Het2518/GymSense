@@ -1,15 +1,33 @@
+# ── Web framework ─────────────────────────────────────────────────────────────
 fastapi==0.110.0
-uvicorn[standard]==0.27.0
-python-multipart==0.0.9
+uvicorn[standard]==0.29.0        # bugfix release over 0.27
+gunicorn==22.0.0                 # production process manager on Render
 
+# ── Auth & security ───────────────────────────────────────────────────────────
+python-jose[cryptography]==3.3.0
+bcrypt==4.1.3
+passlib[bcrypt]==1.7.4
+
+# ── Database ──────────────────────────────────────────────────────────────────
+motor==3.4.0                     # async MongoDB driver (Motor wraps PyMongo)
+pymongo==4.7.2                   # Motor dependency; needed for error types
+pydantic-settings==2.2.1         # Settings from env vars
+
+# ── File uploads ──────────────────────────────────────────────────────────────
+python-multipart==0.0.9
+python-dotenv==1.0.1
+
+# ── Data / ML ─────────────────────────────────────────────────────────────────
 numpy==1.26.4
 pandas==2.2.0
 scikit-learn==1.4.0
 scipy==1.12.0
 joblib==1.3.2
 
+# ── LLM ───────────────────────────────────────────────────────────────────────
 google-generativeai==0.5.4
 
+# ── PDF generation ────────────────────────────────────────────────────────────
 jinja2==3.1.3
 weasyprint==61.2
 Pillow==10.2.0

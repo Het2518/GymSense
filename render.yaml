@@ -1,0 +1,37 @@
+# render.yaml — Render.com service definition
+# Docs: https://render.com/docs/blueprint-spec
+
+services:
+  - type: web
+    name: gymsense-backend
+    runtime: python
+    region: oregon          # choose the region closest to your users
+    plan: free              # upgrade to Starter ($7/mo) to eliminate cold starts
+
+    # Build
+    buildCommand: |
+      pip install --upgrade pip
+      pip install -r backend/requirements.txt
+
+    # Start — gunicorn manages workers; uvicorn workers handle async I/O
+    startCommand: >
+      gunicorn backend.main:app
+      --workers 2
+      --worker-class uvicorn.workers.UvicornWorker
+      --bind 0.0.0.0:$PORT
+      --timeout 120
+      --keep-alive 5
+      --graceful-timeout 30
+      --log-level info
+      --access-logfile -
+      --error-logfile -
+
+    healthCheckPath: /api/health
+
+    envVars:
+      - key: ENV
+        value: production
+      - key: PYTHON_VERSION
+        value: "3.10.13"
+      # Set the following in the Render dashboard (not here, to keep secrets safe):
+      # MONGODB_URI, JWT_SECRET, GEMINI_API_KEY, ALLOWED_ORIGINS
