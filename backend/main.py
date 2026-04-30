@@ -277,6 +277,7 @@ async def analyze_session(
         coaching = llm_coach.generate_coaching(
             session_json, focus=coach_focus, user_profile=user_profile
         )
+        
         coaching_text = llm_coach.format_coaching_text(coaching)
         session_json["coaching"] = coaching
 
