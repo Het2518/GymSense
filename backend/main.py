@@ -199,8 +199,17 @@ def _load_model_sync() -> None:
                 return
         else:
             # Primary path: load full .keras model — self-contained, no train.py
-            state["model"] = tf.keras.models.load_model(keras_path)
-            logger.info("Full .keras model loaded ✓")
+            # compile=False  → skip optimizer restore (inference-only, avoids optimizer crashes)
+            # safe_mode=False → allow Lambda layers & custom ops saved in the model
+            try:
+                state["model"] = tf.keras.models.load_model(
+                    keras_path, compile=False, safe_mode=False
+                )
+                logger.info("Full .keras model loaded ✓  (compile=False, safe_mode=False)")
+            except TypeError:
+                # Older TF (<2.13) doesn't have safe_mode param
+                state["model"] = tf.keras.models.load_model(keras_path, compile=False)
+                logger.info("Full .keras model loaded ✓  (compile=False)")
 
         state["model_loaded"] = True
         logger.info("All ML artifacts ready ✓  model_loaded=True")
