@@ -18,6 +18,7 @@ import HistoryPage   from './pages/HistoryPage';
 import ProfilePage   from './pages/ProfilePage';
 import AnalyticsPage from './pages/AnalyticsPage';
 import GoalsPage     from './pages/GoalsPage';
+import SimulationPage from './pages/SimulationPage';
 
 const ProtectedRoute = ({ children }) => {
   const { token, loading } = useAuth();
@@ -47,6 +48,7 @@ function AnimatedRoutes() {
         <Route path="/analytics" element={<ProtectedRoute><AnalyticsPage /></ProtectedRoute>} />
         <Route path="/profile"   element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
         <Route path="/goals"     element={<ProtectedRoute><GoalsPage /></ProtectedRoute>} />
+        <Route path="/simulate"  element={<ProtectedRoute><SimulationPage /></ProtectedRoute>} />
         <Route path="*"          element={<Navigate to="/" replace />} />
       </Routes>
     </AnimatePresence>

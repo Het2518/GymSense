@@ -1,12 +1,13 @@
 import React, { useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
-import { Activity, LayoutDashboard, Upload, History, BarChart3, Flag, User, LogOut, Sun, Moon, Menu, X } from 'lucide-react';
+import { Activity, LayoutDashboard, Upload, History, BarChart3, Flag, User, LogOut, Sun, Moon, Menu, X, Zap } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
 
 const NAV = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/upload',    label: 'Analyse',   icon: Upload },
+  { to: '/simulate',  label: 'Simulate',  icon: Zap },
   { to: '/history',   label: 'History',   icon: History },
   { to: '/analytics', label: 'Analytics', icon: BarChart3 },
   { to: '/goals',     label: 'Goals',     icon: Flag },
