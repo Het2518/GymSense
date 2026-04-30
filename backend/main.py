@@ -1,5 +1,5 @@
 # === FILE: backend/main.py ===
-# GymSense AI — FastAPI backend (production-grade)
+# GymSense AI — FastAPI backend (production-grade, crash-resistant)
 
 import asyncio
 import logging
@@ -15,21 +15,19 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
 
 # ── project root on sys.path ──────────────────────────────────────────────────
 PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-# Heavy ML imports – only loaded when actually used (lazy) so cold-start is fast
-# numpy / tensorflow are imported at function call time, not module load time.
-
-# MongoDB & Auth
+# ── MongoDB & Auth (lightweight — always safe to import) ──────────────────────
 from backend.auth import get_current_user
 from backend.auth import router as auth_router
 from backend.database import (
@@ -67,44 +65,42 @@ state: dict = {
 }
 
 
-# ── Lifespan (replaces deprecated on_event) ───────────────────────────────────
+# ── Lifespan ──────────────────────────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """
-    Startup / shutdown lifecycle.
-
-    Startup order:
-      1. Ping MongoDB (fail-fast if Atlas unreachable)
-      2. Create indexes
-      3. Load ML model in a thread pool (non-blocking)
-    """
-    # 1. Database
-    logger.info("Checking MongoDB connection …")
+    # 1. DB ping — non-fatal on failure
     try:
         await ping_db()
         logger.info("MongoDB reachable ✓")
     except Exception as exc:
-        logger.error(f"MongoDB unreachable at startup: {exc}")
-        # Don't crash the process — auth/API still work if ML model is absent
-        # but DB issue is logged prominently.
+        logger.error(f"MongoDB ping failed: {exc}")
 
     # 2. Indexes
-    await create_indexes()
+    try:
+        await create_indexes()
+    except Exception as exc:
+        logger.warning(f"Index creation skipped: {exc}")
 
-    # 3. ML model (CPU-heavy → thread pool so startup doesn't block event loop)
-    loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, _load_model_sync)
+    # 3. ML model — wrapped so a crash here never prevents the server from starting
+    try:
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, _load_model_sync)
+    except Exception as exc:
+        logger.warning(f"ML model loading skipped: {exc}")
 
-    logger.info("Startup complete ✓")
+    logger.info("GymSense backend startup complete ✓")
     yield
-    # Shutdown
-    logger.info("Shutting down GymSense …")
+    logger.info("GymSense backend shutting down …")
 
 
 def _load_model_sync():
-    """Synchronous model loading — runs in executor thread."""
-    import joblib
-    import tensorflow as tf
+    """Loads TF model in a thread pool. Completely optional — server works without it."""
+    try:
+        import joblib
+        import tensorflow as tf
+    except ImportError:
+        logger.warning("tensorflow/joblib not installed — ML features disabled")
+        return
 
     gpus = tf.config.list_physical_devices("GPU")
     if gpus:
@@ -114,7 +110,7 @@ def _load_model_sync():
         state["gpu_name"] = gpus[0].name
         logger.info(f"GPU found: {gpus[0].name}")
     else:
-        logger.info("No GPU — using CPU")
+        logger.info("No GPU — using CPU for inference")
 
     model_path = os.environ.get(
         "MODEL_WEIGHTS_PATH", os.path.join(MODELS_DIR, "best_model.weights.h5")
@@ -124,80 +120,72 @@ def _load_model_sync():
         "LABEL_ENCODER_PATH", os.path.join(MODELS_DIR, "label_encoder.pkl")
     )
 
-    try:
-        if os.path.exists(scaler_path):
-            state["scaler"] = joblib.load(scaler_path)
-            logger.info("Scaler loaded ✓")
-        else:
-            logger.warning(f"Scaler not found: {scaler_path}")
+    if os.path.exists(scaler_path):
+        state["scaler"] = joblib.load(scaler_path)
+        logger.info("Scaler loaded ✓")
+    if os.path.exists(le_path):
+        state["le"] = joblib.load(le_path)
+        logger.info("Label encoder loaded ✓")
 
-        if os.path.exists(le_path):
-            state["le"] = joblib.load(le_path)
-            logger.info("Label encoder loaded ✓")
-        else:
-            logger.warning(f"Label encoder not found: {le_path}")
-
-        if os.path.exists(model_path) and state["le"]:
+    if os.path.exists(model_path) and state["le"]:
+        try:
             import train
 
             n_classes = len(state["le"].classes_)
             state["model"] = train.build_hybrid_model(
-                n_classes=n_classes,
-                n_channels=7,
-                window_size=80,
-                n_windows=4,
-                sensor_mode="combine",
+                n_classes=n_classes, n_channels=7, window_size=80,
+                n_windows=4, sensor_mode="combine",
             )
             state["model"].load_weights(model_path)
             logger.info("Model weights loaded ✓")
-        else:
-            logger.warning(f"Model weights not found or LE missing: {model_path}")
+        except Exception as exc:
+            logger.warning(f"Model load failed (ML disabled): {exc}")
 
-        if state["model"] and state["scaler"] and state["le"]:
-            state["model_loaded"] = True
-            logger.info("All ML artifacts loaded ✓")
-
-    except Exception as exc:
-        logger.error(f"Model load error: {exc}", exc_info=True)
+    if state["model"] and state["scaler"] and state["le"]:
+        state["model_loaded"] = True
+        logger.info("All ML artifacts ready ✓")
 
 
-# ── App factory ───────────────────────────────────────────────────────────────
+# ── CORS origins ──────────────────────────────────────────────────────────────
+_raw_origins = os.environ.get("ALLOWED_ORIGINS", "*")
+ALLOWED_ORIGINS = (
+    ["*"]
+    if _raw_origins.strip() == "*"
+    else [o.strip() for o in _raw_origins.split(",") if o.strip()]
+)
+
+# ── App ───────────────────────────────────────────────────────────────────────
 app = FastAPI(
     title="GymSense AI SaaS",
     version="2.1.0",
     lifespan=lifespan,
-    # Disable docs in production for a tiny perf gain + security
     docs_url="/docs" if os.environ.get("ENV") != "production" else None,
     redoc_url=None,
 )
 
-# GZip responses > 1 KB (reduces payload size on slow mobile connections)
-app.add_middleware(GZipMiddleware, minimum_size=1024)
-
-# CORS
-_raw_origins = os.environ.get("ALLOWED_ORIGINS", "*")
-ALLOWED_ORIGINS = (
-    ["*"] if _raw_origins.strip() == "*"
-    else [o.strip() for o in _raw_origins.split(",") if o.strip()]
-)
-logger.info(f"CORS allowed origins: {ALLOWED_ORIGINS}")
-
+# ── IMPORTANT: CORS must be the FIRST middleware added ────────────────────────
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
     allow_credentials=False,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
     allow_headers=["*"],
     expose_headers=["Content-Disposition"],
+    max_age=86400,  # cache preflight for 24 h — browsers won't re-send OPTIONS
 )
 
-# Auth router
+# GZip after CORS
+app.add_middleware(GZipMiddleware, minimum_size=1024)
+
+logger.info(f"CORS allowed origins: {ALLOWED_ORIGINS}")
+
+# ── Auth router ───────────────────────────────────────────────────────────────
 app.include_router(auth_router)
 
 
-# ── Request-logging middleware ────────────────────────────────────────────────
+# ── Request-timing middleware ─────────────────────────────────────────────────
 @app.middleware("http")
-async def log_requests(request, call_next):
+async def log_requests(request: Request, call_next):
     t0 = time.monotonic()
     response = await call_next(request)
     elapsed = (time.monotonic() - t0) * 1000
@@ -207,7 +195,7 @@ async def log_requests(request, call_next):
     return response
 
 
-# ── Health check ─────────────────────────────────────────────────────────────
+# ── Health check (unauthenticated, always responds) ───────────────────────────
 @app.get("/api/health", tags=["meta"])
 async def health():
     return {
@@ -243,7 +231,6 @@ async def analyze_session(
             f"[{session_id}] CSV uploaded ({len(content)} bytes) by {current_user.id}"
         )
 
-        # CPU-heavy work → thread pool so the event loop stays free
         loop = asyncio.get_event_loop()
 
         import session_processor
@@ -256,7 +243,6 @@ async def analyze_session(
             state["scaler"],
             state["le"],
         )
-
         session_json.update(
             {
                 "session_id": session_id,
@@ -266,7 +252,6 @@ async def analyze_session(
             }
         )
 
-        # LLM coaching (I/O-bound — awaitable)
         import llm_coach
 
         user_profile = {
@@ -284,14 +269,12 @@ async def analyze_session(
         coaching_text = llm_coach.format_coaching_text(coaching)
         session_json["coaching"] = coaching
 
-        # PDF (CPU-bound → thread pool)
         import report_builder
 
         await loop.run_in_executor(
             None, report_builder.build_report, session_json, coaching_text, session_id
         )
 
-        # Persist to MongoDB (async)
         sessions_col = get_sessions_collection()
         await sessions_col.insert_one(session_json)
 
@@ -343,15 +326,9 @@ async def list_sessions(current_user: UserOut = Depends(get_current_user)):
     sessions_col = get_sessions_collection()
     cursor = sessions_col.find(
         {"user_id": current_user.id},
-        # Project only the fields we need — avoids sending huge documents
         projection={
-            "session_id": 1,
-            "session_date": 1,
-            "total_duration_min": 1,
-            "total_exercises": 1,
-            "total_reps": 1,
-            "avg_tempo_score": 1,
-            "coaching": 1,
+            "session_id": 1, "session_date": 1, "total_duration_min": 1,
+            "total_exercises": 1, "total_reps": 1, "avg_tempo_score": 1, "coaching": 1,
         },
     ).sort("session_date", -1)
 
@@ -389,7 +366,6 @@ async def get_session_detail(
 @app.get("/api/dashboard/stats")
 async def dashboard_stats(current_user: UserOut = Depends(get_current_user)):
     sessions_col = get_sessions_collection()
-    # Use aggregation pipeline — single round-trip instead of Python loop
     pipeline = [
         {"$match": {"user_id": current_user.id}},
         {
@@ -403,17 +379,10 @@ async def dashboard_stats(current_user: UserOut = Depends(get_current_user)):
         },
     ]
     results = await sessions_col.aggregate(pipeline).to_list(length=1)
-
     if not results:
-        return {
-            "total_workouts": 0,
-            "total_duration_min": 0,
-            "total_reps": 0,
-            "muscle_distribution": {},
-        }
+        return {"total_workouts": 0, "total_duration_min": 0, "total_reps": 0, "muscle_distribution": {}}
 
     row = results[0]
-    # Flatten nested arrays of muscle groups
     muscle_counts: dict = {}
     for group_list in row.get("muscle_groups", []):
         for muscle in (group_list or []):

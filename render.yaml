@@ -1,30 +1,24 @@
 # render.yaml — Render.com service definition
 # Docs: https://render.com/docs/blueprint-spec
+#
+# HOW TO USE:
+#   If your Render service was created manually (not via this YAML),
+#   copy the startCommand below into your service's Settings page on Render.
+#   Also set these env vars in the Render Dashboard → Environment tab.
 
 services:
   - type: web
     name: gymsense-backend
     runtime: python
-    region: oregon          # choose the region closest to your users
-    plan: free              # upgrade to Starter ($7/mo) to eliminate cold starts
+    region: oregon
+    plan: free
 
-    # Build
-    buildCommand: |
-      pip install --upgrade pip
-      pip install -r backend/requirements.txt
+    # Build — installs ALL deps from the backend folder
+    buildCommand: pip install --upgrade pip && pip install -r backend/requirements.txt
 
-    # Start — gunicorn manages workers; uvicorn workers handle async I/O
-    startCommand: >
-      gunicorn backend.main:app
-      --workers 2
-      --worker-class uvicorn.workers.UvicornWorker
-      --bind 0.0.0.0:$PORT
-      --timeout 120
-      --keep-alive 5
-      --graceful-timeout 30
-      --log-level info
-      --access-logfile -
-      --error-logfile -
+    # Start — gunicorn with 2 async (uvicorn) workers
+    # Copy this EXACT command into Render Dashboard → Settings → Start Command
+    startCommand: gunicorn backend.main:app --workers 2 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT --timeout 120 --keep-alive 5 --graceful-timeout 30 --log-level info --access-logfile - --error-logfile -
 
     healthCheckPath: /api/health
 
@@ -33,5 +27,9 @@ services:
         value: production
       - key: PYTHON_VERSION
         value: "3.10.13"
-      # Set the following in the Render dashboard (not here, to keep secrets safe):
-      # MONGODB_URI, JWT_SECRET, GEMINI_API_KEY, ALLOWED_ORIGINS
+      - key: ALLOWED_ORIGINS
+        value: "*"
+      # ⚠️  Set these sensitive vars in the Render Dashboard, NOT here:
+      # MONGODB_URI  →  mongodb+srv://...
+      # JWT_SECRET   →  (long random string, 64+ chars)
+      # GEMINI_API_KEY → AIza...
