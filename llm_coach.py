@@ -6,20 +6,27 @@ import json
 import re
 import logging
 
-import google.generativeai as genai
+from groq import Groq
 from backend.config import settings
 
 logger = logging.getLogger('gymsense')
 
+_groq_client = None
 
-def _configure_gemini():
-    """Configure Gemini API with key from environment."""
-    api_key = settings.gemini_api_key or os.environ.get('GEMINI_API_KEY', '')
+def _get_groq_client():
+    """Configure Groq API client with key from environment."""
+    global _groq_client
+    if _groq_client is not None:
+        return _groq_client
+        
+    api_key = settings.groq_api_key or os.environ.get('GROQ_API_KEY', '')
     if not api_key:
-        logger.warning("GEMINI_API_KEY not set — LLM coaching will be disabled.")
-        return False
-    genai.configure(api_key=api_key)
-    logger.info("Gemini API configured successfully.")
+        logger.warning("GROQ_API_KEY not set — LLM coaching will be disabled.")
+        raise ValueError("GROQ_API_KEY not configured")
+        
+    _groq_client = Groq(api_key=api_key)
+    logger.info("Groq API configured successfully.")
+    return _groq_client
 
 
 # ── Focus-specific appendices ───────────────────────────────────────────────
@@ -198,13 +205,13 @@ def generate_coaching(session_json, focus='general', user_profile=None):
     logger.info(f"generate_coaching called: focus={focus}, profile_provided={bool(user_profile)}")
 
     try:
-        _configure_gemini()
+        client = _get_groq_client()
     except ValueError as e:
-        logger.error(f"Gemini config error: {e}")
+        logger.error(f"Groq config error: {e}")
         return {
-            'strengths': 'AI coaching is unavailable — Gemini API key not configured.',
+            'strengths': 'AI coaching is unavailable — Groq API key not configured.',
             'improvements': str(e),
-            'next_session': 'Please set GEMINI_API_KEY in your .env file to enable AI coaching.',
+            'next_session': 'Please set GROQ_API_KEY in your .env file to enable AI coaching.',
             'motivation': '',
             'raw': '',
         }
@@ -212,19 +219,17 @@ def generate_coaching(session_json, focus='general', user_profile=None):
     prompt = _build_prompt(session_json, focus, user_profile)
 
     try:
-        model = genai.GenerativeModel('gemini-2.0-flash')
-        logger.info("Sending request to Gemini API...")
-        response = model.generate_content(
-            prompt,
-            generation_config=genai.types.GenerationConfig(
-                max_output_tokens=1200,
-                temperature=0.72,
-            ),
+        logger.info("Sending request to Groq API (llama3-70b-8192)...")
+        completion = client.chat.completions.create(
+            model="llama3-70b-8192",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.72,
+            max_tokens=1200,
         )
-        raw = response.text
-        logger.info(f"Gemini response received ({len(raw)} chars)")
+        raw = completion.choices[0].message.content
+        logger.info(f"Groq response received ({len(raw)} chars)")
     except Exception as e:
-        logger.error(f"Gemini API error: {e}", exc_info=True)
+        logger.error(f"Groq API error: {e}", exc_info=True)
         return {
             'strengths': 'Error generating coaching feedback.',
             'improvements': f'API error: {str(e)}',

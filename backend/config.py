@@ -6,7 +6,7 @@ class Settings(BaseSettings):
     jwt_secret: str = "gymsense-change-this-in-production-please"
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 60 * 24 * 2  # 2 days
-    gemini_api_key: str = ""
+    groq_api_key: str = ""
     # Comma-separated list of allowed CORS origins.
     # Set ALLOWED_ORIGINS in your Render / Vercel environment variables
     # to override the defaults baked into main.py
