@@ -11,6 +11,11 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 
+# --- TF Memory Optimizations for Render Free Tier (512MB RAM) ---
+os.environ["TF_NUM_INTEROP_THREADS"] = "1"
+os.environ["TF_NUM_INTRAOP_THREADS"] = "1"
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+
 from dotenv import load_dotenv
 
 # ── Resolve ALL paths relative to THIS file — works regardless of CWD ─────────
