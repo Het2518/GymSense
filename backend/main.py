@@ -242,16 +242,11 @@ app = FastAPI(
     redoc_url=None,
 )
 
-# CORS Configuration
-from backend.config import settings
-origins = [o.strip() for o in settings.allowed_origins.split(",") if o.strip()]
-if "*" in origins or not origins:
-    origins = ["*"]
-
+# CORS — wildcard (Bearer tokens, no cookies needed)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True if "*" not in origins else False,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["Content-Disposition"],
