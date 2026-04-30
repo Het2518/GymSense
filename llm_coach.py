@@ -211,7 +211,7 @@ def generate_coaching(session_json, focus='general', user_profile=None):
         return {
             'strengths': 'AI coaching is unavailable — Groq API key not configured.',
             'improvements': str(e),
-            'next_session': 'Please set GROQ_API_KEY in your .env file to enable AI coaching.',
+            'next_session': 'Please set GROQ_API_KEY in your .env file (or Render Environment Variables) to enable AI coaching.',
             'motivation': '',
             'raw': '',
         }
