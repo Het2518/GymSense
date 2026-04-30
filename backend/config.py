@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     # to override the defaults baked into main.py
     allowed_origins: str = (
         "http://localhost:3000,http://localhost:5173,http://127.0.0.1:3000,"
-        "https://gym-sense-orcin.vercel.app,https://gymsense-1.onrender.com"
+        "https://gym-sense-orcin.vercel.app,https://gymsense-h.onrender.com"
     )
 
     model_config = SettingsConfigDict(
