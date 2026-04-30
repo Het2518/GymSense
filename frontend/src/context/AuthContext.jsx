@@ -21,8 +21,18 @@ export function AuthProvider({ children }) {
           setUser(userData);
         } catch (err) {
           console.error("Failed to load user:", err);
-          if (err.message === 'UNAUTHORIZED') {
+          const msg = err.message || '';
+          
+          if (msg.includes('UNAUTHORIZED') || 
+              msg.includes('Could not validate credentials') || 
+              msg.includes('Signature has expired') || 
+              msg.includes('HTTP 401')) {
+            // Token is legitimately invalid or expired. Clear session.
+            toast.error('Session expired. Please log in again.');
             logout();
+          } else if (msg.includes('HTTP 50') || msg.includes('Failed to fetch')) {
+            // Backend is temporarily down or restarting due to OOM
+            toast.error('Cannot connect to server. It might be waking up.');
           }
         }
       }
