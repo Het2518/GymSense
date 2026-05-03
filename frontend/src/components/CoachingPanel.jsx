@@ -4,6 +4,8 @@
 import React, { useState } from 'react';
 import { CheckCircle2, TrendingUp, ArrowRightCircle } from 'lucide-react';
 
+import ReactMarkdown from 'react-markdown';
+
 const SECTIONS = [
   { key: 'strengths', icon: CheckCircle2, title: 'Strengths', color: 'text-rose-700', bgColor: 'bg-rose-50', borderColor: 'border-rose-200' },
   { key: 'improvements', icon: TrendingUp, title: 'Improvements', color: 'text-amber-700', bgColor: 'bg-amber-50', borderColor: 'border-amber-200' },
@@ -38,9 +40,18 @@ export default function CoachingPanel({ coaching, sessionId }) {
               <Icon className={`w-6 h-6 ${section.color}`} />
               <h4 className={`font-bold text-lg ${section.color}`}>{section.title}</h4>
             </div>
-            <p className="text-slate-700 text-sm sm:text-base leading-relaxed whitespace-pre-wrap">
-              {content}
-            </p>
+            <div className="text-slate-700 text-sm sm:text-base leading-relaxed whitespace-pre-wrap">
+              <ReactMarkdown 
+                components={{
+                  p: ({node, ...props}) => <p className="mb-2 last:mb-0" {...props} />,
+                  ul: ({node, ...props}) => <ul className="list-disc pl-5 mb-2" {...props} />,
+                  li: ({node, ...props}) => <li className="mb-1" {...props} />,
+                  strong: ({node, ...props}) => <strong className="font-bold text-slate-900" {...props} />
+                }}
+              >
+                {content}
+              </ReactMarkdown>
+            </div>
           </div>
         );
       })}

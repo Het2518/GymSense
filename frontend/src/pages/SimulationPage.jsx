@@ -147,7 +147,8 @@ export default function SimulationPage() {
       const header = "Subject,Position,Session,A_x,A_y,A_z,G_x,G_y,G_z,C_1,Workout\n";
       const rows = dataStore.current.map(f => {
         // Normalise base generated values around 0.5 (to mimic the dummy.csv provided)
-        const fmt = (val) => (val * 0.01 + 0.5).toFixed(4);
+        // Scaler std dev is ~0.04, so using 0.04 correctly maps variance for the model!
+        const fmt = (val) => (val * 0.04 + 0.5).toFixed(4);
         return `1,wrist,1,${fmt(f.A_x)},${fmt(f.A_y)},${fmt(f.A_z)},${fmt(f.G_x)},${fmt(f.G_y)},${fmt(f.G_z)},${fmt(f.C_1)},${f.workout}`;
       });
       const csvContent = header + rows.join("\n");
@@ -193,10 +194,21 @@ export default function SimulationPage() {
           <button 
             onClick={handleAnalyze}
             disabled={isAnalyzing || dataStore.current.length === 0}
-            className="btn-outline bg-white dark:bg-zinc-900 px-4 py-2 flex items-center gap-2 disabled:opacity-50"
+            className={`btn-outline bg-white dark:bg-zinc-900 px-4 py-2 flex items-center gap-2 transition-all ${
+              isAnalyzing ? 'border-primary-500 text-primary-600 bg-primary-50 dark:bg-primary-900/20' : 'disabled:opacity-50'
+            }`}
           >
-            {isAnalyzing ? <Loader2 size={16} className="animate-spin" /> : <Zap size={16} />}
-            Analyze Session
+            {isAnalyzing ? (
+              <>
+                <Loader2 size={16} className="animate-spin text-primary-500" />
+                <span className="animate-pulse font-medium">Running Deep Inference...</span>
+              </>
+            ) : (
+              <>
+                <Zap size={16} />
+                Analyze Session
+              </>
+            )}
           </button>
         </div>
       </div>

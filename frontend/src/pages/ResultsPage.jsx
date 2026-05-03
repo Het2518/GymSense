@@ -1,6 +1,6 @@
 import React, { useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { ChevronLeft, Download, Activity, Target, BrainCircuit, Dumbbell, Info } from 'lucide-react';
 import SummaryCards from '../components/SummaryCards';
 import TimelineChart from '../components/TimelineChart';
@@ -10,16 +10,18 @@ import DownloadButton from '../components/DownloadButton';
 
 export default function ResultsPage({ data }) {
   const navigate = useNavigate();
+  const location = useLocation();
+  const pageData = location.state?.resultData || data;
 
   useEffect(() => {
-    if (!data) {
+    if (!pageData) {
       navigate('/');
     }
-  }, [data, navigate]);
+  }, [pageData, navigate]);
 
-  if (!data) return null;
+  if (!pageData) return null;
 
-  const { session_summary, timeline, exercises, coaching, session_id } = data;
+  const { session_summary, timeline, exercises, coaching, session_id } = pageData;
 
   const containerVariants = {
     hidden: { opacity: 0 },

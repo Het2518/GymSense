@@ -19,7 +19,7 @@ export default function Navbar() {
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
 
-  const handleLogout = () => { logout(); navigate('/'); setOpen(false); };
+  const handleLogout = () => { logout(); navigate('/login', { replace: true }); setOpen(false); };
 
   const linkCls = ({ isActive }) =>
     `flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-medium transition-all duration-150 ${

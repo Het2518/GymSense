@@ -225,14 +225,22 @@ def generate_coaching(session_json, focus='general', user_profile=None):
     prompt = _build_prompt(session_json, focus, user_profile)
 
     try:
-        logger.info("Sending request to Groq API (llama3-70b-8192)...")
+        logger.info("Sending request to Groq API (openai/gpt-oss-120b)...")
         completion = client.chat.completions.create(
-            model="llama3-70b-8192",
+            model="openai/gpt-oss-120b",
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.72,
-            max_tokens=1200,
+            temperature=1,
+            max_completion_tokens=4000,  # Reduced from 8192 to prevent 8000 TPM limit error
+            top_p=1,
+            reasoning_effort="medium",
+            stream=True,
+            stop=None
         )
-        raw = completion.choices[0].message.content
+        
+        raw = ""
+        for chunk in completion:
+            raw += chunk.choices[0].delta.content or ""
+            
         logger.info(f"Groq response received ({len(raw)} chars)")
     except Exception as e:
         logger.error(f"Groq API error: {e}", exc_info=True)

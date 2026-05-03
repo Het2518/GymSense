@@ -10,8 +10,10 @@ const API_BASE = (typeof window !== 'undefined' && window.location.hostname === 
 
 console.log(`[API] Backend Base URL: ${API_BASE || 'relative proxy (dev)'}`);
 
+import Cookies from 'js-cookie';
+
 function getAuthHeaders(isFormData = false) {
-  const token = localStorage.getItem('gymsense_token');
+  const token = Cookies.get('gymsense_token');
   const headers = {};
   if (token) {
     headers['Authorization'] = `Bearer ${token}`;

@@ -157,8 +157,8 @@ def process_session(csv_path, model, scaler, le):
     # 7. Segment detection
     runs, starts, lengths = run_length_encode(smoothed_labels)
 
-    # Discard segments < 10 consecutive windows (< 20 seconds)
-    MIN_WINDOWS = 10
+    # Discard segments < 2 consecutive windows (< 4 seconds) to support short simulations
+    MIN_WINDOWS = 2
     filtered_segments = []
     for label, start_win, length in zip(runs, starts, lengths):
         if length >= MIN_WINDOWS:

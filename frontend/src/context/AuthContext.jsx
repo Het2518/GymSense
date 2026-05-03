@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { login, register, getMe } from '../api';
 import toast from 'react-hot-toast';
+import Cookies from 'js-cookie';
 
 const AuthContext = createContext();
 
@@ -10,7 +11,7 @@ export function useAuth() {
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
-  const [token, setToken] = useState(localStorage.getItem('gymsense_token') || null);
+  const [token, setToken] = useState(Cookies.get('gymsense_token') || null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -44,7 +45,7 @@ export function AuthProvider({ children }) {
   const handleLogin = async (email, password) => {
     try {
       const data = await login(email, password);
-      localStorage.setItem('gymsense_token', data.access_token);
+      Cookies.set('gymsense_token', data.access_token, { expires: 2 });
       setToken(data.access_token);
       toast.success('Logged in successfully');
       return true;
@@ -57,7 +58,7 @@ export function AuthProvider({ children }) {
   const handleRegister = async (name, email, password) => {
     try {
       const data = await register(name, email, password);
-      localStorage.setItem('gymsense_token', data.access_token);
+      Cookies.set('gymsense_token', data.access_token, { expires: 2 });
       setToken(data.access_token);
       toast.success('Registration successful');
       return true;
@@ -68,7 +69,7 @@ export function AuthProvider({ children }) {
   };
 
   const logout = () => {
-    localStorage.removeItem('gymsense_token');
+    Cookies.remove('gymsense_token');
     setToken(null);
     setUser(null);
     toast.success('Logged out');
